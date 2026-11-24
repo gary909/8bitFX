@@ -3,16 +3,21 @@ Thumbs.db
 desktop.ini
 .DS_Store
 *.swp
+.vscode/
+.idea/
 
 # scratch output from the headless checks
 dom-*.html
+shot*.png
 run.log
+*.log
 narrow.png
 mobile.png
 dpr2.png
 tall.png
 test.wav
 *.zip
+*.tmp
 
 # tooling (the project itself has no build step)
 node_modules/
