@@ -67,6 +67,7 @@
     var C = root.SFX.codec;
     var B = root.SFX.bank;
     var Z = root.SFX.zip;
+    var M = root.SFX.mix;
     var i, j, k;
 
     check("WAV header: 8-bit mono PCM", function () {
@@ -689,8 +690,10 @@
       var list = B.all();
       assert(list.length === 2, "expected 2 entries, got " + list.length);
       assert(list[0].name === "two", "newest entry should be first");
-      assert(list[0].params.p_base_freq === p.p_base_freq, "params not stored verbatim");
-      assert(list[0].params.p_dc_block === p.p_dc_block, "switch not stored");
+      assert(list[0].patch.sections[0].p_base_freq === p.p_base_freq, "params not stored verbatim");
+      assert(list[0].patch.sections[0].p_dc_block === p.p_dc_block, "switch not stored");
+      assert(list[0].patch.enabled[0] === true && list[0].patch.enabled[1] === false,
+        "enabled flags not stored");
 
       var n;
       for (n = 0; n < B.LIMIT + 6; n++) { B.add(p, "bulk " + n); }
@@ -722,6 +725,115 @@
       assert(out.bits === 16 && out.sampleRate === 22050, "metadata mismatch");
       approx(out.duration, out.frames / 22050, 1e-9, "duration mismatch");
       return out.byteLength + " bytes";
+    });
+
+    check("mixer sums sections with 1/n gain", function () {
+      function layer(value, frames, rate) {
+        var f = new Float32Array(frames);
+        for (var n = 0; n < frames; n++) { f[n] = value; }
+        return { float: f, frames: frames, peak: Math.abs(value), sampleRate: rate || 44100 };
+      }
+
+      var one = M.combine([layer(0.5, 100), null, null], [true, false, false]);
+      approx(one.float[0], 0.5, 1e-6, "a single section should pass through unchanged");
+      assert(one.count === 1 && one.frames === 100, "single-section bookkeeping");
+      approx(one.duration, 100 / 44100, 1e-9, "duration");
+
+      var three = M.combine([layer(0.3, 100), layer(0.3, 100), layer(0.3, 100)],
+        [true, true, true]);
+      approx(three.float[0], 0.3, 1e-6, "three equal layers keep the same level");
+      assert(three.count === 3, "count should be 3");
+      approx(three.peak, 0.3, 1e-6, "peak");
+
+      var tail = M.combine([layer(0.2, 100), layer(0.4, 250)], [true, true]);
+      assert(tail.frames === 250, "mix should run as long as the longest section");
+      approx(tail.float[50], 0.3, 1e-6, "overlap is summed then halved");
+      approx(tail.float[150], 0.2, 1e-6, "tail comes from the longer layer only");
+
+      var none = M.combine([layer(0.5, 100)], [false]);
+      assert(none.frames === 0 && none.count === 0, "nothing enabled should produce an empty mix");
+      approx(none.duration, 0, 1e-9, "empty duration");
+      return "1/n gain, tail handling and empty mix verified";
+    });
+
+    check("patch link (v4) carries three sections and the flags", function () {
+      var a = G.make("laserShoot", 31);
+      var b = G.make("explosion", 32);
+      var c = G.make("powerUp", 33);
+      var code = C.encodePatch({ sections: [a, b, c], enabled: [true, false, true] });
+
+      assert(code.charAt(0) === "4", "missing v4 marker");
+      assert(!/[+/=]/.test(code), "payload is not URL safe");
+      assert(code.length < 150, "patch link too long: " + code.length);
+
+      var back = C.decodePatch(code);
+      assert(back && back.sections.length === 3, "sections lost");
+      assert(back.enabled[0] === true && back.enabled[1] === false && back.enabled[2] === true,
+        "enabled flags lost");
+      approx(back.sections[1].p_base_freq, b.p_base_freq, 0.004, "section 2 mismatch");
+      approx(back.sections[2].p_env_decay, c.p_env_decay, 0.004, "section 3 mismatch");
+      assert(back.sections[2].wave_type === c.wave_type, "section 3 wave type lost");
+      return code.length + " chars for three sections";
+    });
+
+    check("legacy links load as one enabled section", function () {
+      var p = G.make("jump", 44);
+
+      var fromV3 = C.decodePatch(C.encode(p));
+      assert(fromV3, "decodePatch failed for a v3 link");
+      assert(fromV3.enabled[0] === true && fromV3.enabled[1] === false,
+        "only section 1 should be enabled");
+      approx(fromV3.sections[0].p_base_freq, p.p_base_freq, 0.004, "section 1 mismatch");
+
+      var fromV1 = C.decodePatch(C.encodeLegacy(p));
+      assert(fromV1 && fromV1.enabled[0] === true, "v1 link should load as one section");
+      return "v3 and v1 both map to section 1";
+    });
+
+    check("bank migrates single-sound entries to patches", function () {
+      var memory = {
+        data: {},
+        getItem: function (key) { return this.data[key] === undefined ? null : this.data[key]; },
+        setItem: function (key, value) { this.data[key] = String(value); },
+        removeItem: function (key) { delete this.data[key]; }
+      };
+      var p = G.make("blipSelect", 55);
+      memory.setItem(B.KEY, JSON.stringify([{
+        id: "old1", name: "legacy", at: 1, params: P.serialize(p)
+      }]));
+
+      B.useStorage(memory);
+      var list = B.all();
+      assert(list.length === 1, "entry missing");
+      assert(list[0].patch && list[0].patch.sections.length === 3, "not migrated");
+      assert(list[0].params === undefined, "legacy field not removed");
+      assert(list[0].patch.enabled[0] === true && list[0].patch.enabled[1] === false,
+        "migrated flags wrong");
+      approx(list[0].patch.sections[0].p_base_freq, p.p_base_freq, 1e-9, "params lost");
+      B.useStorage(null);
+      return "legacy entry migrated";
+    });
+
+    check("patch WAV export mixes the enabled sections", function () {
+      var a = G.make("tone", 61);
+      var b = G.make("explosion", 62);
+
+      var one = root.SFX.exporter.toWavPatch(
+        { sections: [a, b, b], enabled: [true, false, false] }, { normalize: false });
+      var two = root.SFX.exporter.toWavPatch(
+        { sections: [a, b, b], enabled: [true, true, false] }, { normalize: false });
+
+      assert(one.frames > 0 && two.frames > 0, "empty export");
+      var view = new DataView(two.bytes.buffer);
+      assert(view.getUint32(0, true) === 0x46464952, "not a RIFF file");
+      assert(view.getUint16(34, true) === a.sample_size, "wrong depth");
+
+      var differs = false, n;
+      for (n = 44; n < Math.min(one.bytes.length, two.bytes.length); n += 97) {
+        if (one.bytes[n] !== two.bytes[n]) { differs = true; break; }
+      }
+      assert(differs, "enabling a second section should change the audio");
+      return one.frames + " vs " + two.frames + " frames";
     });
 
     var failed = 0;

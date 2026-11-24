@@ -1,9 +1,10 @@
 /* 8bitFX — in-app self check (?selftest=1).
-   Exercises the wiring unit tests can't reach — chips, history, permalinks, the
-   preview-quality guard, export, preferences, the bank and the ZIP writer — and
-   writes a report into the DOM so a headless browser (test.cmd) can read it.
+   Exercises the wiring unit tests can't reach — section cards, mixing, history,
+   permalinks, preferences, the bank and the ZIP writer — and writes a report into
+   the DOM so a headless browser (test.cmd) can read it.
 
-   ctx: { doc, state, $, renderAll, ensureFullQuality, changeSetting, undo, redo } */
+   ctx: { doc, state, $, renderAll, ensureFullQuality, changeSetting, undo, redo,
+          selectSection, toggleSection } */
 (function (root, factory) {
   "use strict";
   var api = factory(root);
@@ -42,67 +43,143 @@
       if (!cond) { throw new Error(message || "assertion failed"); }
     }
 
-    check("panel built with 23 sliders and 2 switches", function () {
+    function approx(actual, expected, tolerance, message) {
+      if (!(Math.abs(actual - expected) <= tolerance)) {
+        throw new Error((message || "out of range") + " (got " + actual +
+          ", expected " + expected + ")");
+      }
+    }
+
+    check("parameter panel built with 23 sliders and 2 switches", function () {
       var ranges = doc.querySelectorAll('#param-groups input[type="range"]').length;
       var toggles = doc.querySelectorAll('#param-groups input[type="checkbox"]').length;
       assert(ranges === 23, "sliders: " + ranges);
       assert(toggles === 2, "switches: " + toggles);
     });
 
-    check("rate/depth chips follow the parameters", function () {
+    check("three section cards, checkboxes and scopes", function () {
+      var cards = doc.querySelectorAll("#sections .section-card");
+      var boxes = doc.querySelectorAll("#sections input[type='checkbox']");
+      var minis = doc.querySelectorAll("#sections canvas");
+      var all = doc.querySelectorAll("canvas");
+      assert(cards.length === 3, "cards: " + cards.length);
+      assert(boxes.length === 3, "checkboxes: " + boxes.length);
+      assert(minis.length === 3, "mini scopes: " + minis.length);
+      assert(all.length === 4, "canvases: " + all.length);
+      assert(state.sections.length === 3, "sections in state: " + state.sections.length);
+      return cards.length + " cards, " + all.length + " canvases";
+    });
+
+    check("rate/depth chips follow the (shared) format", function () {
       ctx.changeSetting(function () {
-        state.params.sample_rate = 22050;
-        state.params.sample_size = 16;
+        state.sections.forEach(function (section) {
+          section.sample_rate = 22050;
+          section.sample_size = 16;
+        });
       });
       assert($("rate-22050").checked, "22k chip not selected");
       assert($("bits-16").checked, "16 bit chip not selected");
-      assert(state.rendered.sampleRate === 22050, "render ignored the new rate");
+      assert(state.rendered.sampleRate === 22050, "mix ignored the new rate");
+      assert(state.sections[2].sample_rate === 22050, "all sections should share the rate");
     });
 
     check("custom sample rate is reflected in the legend", function () {
-      ctx.changeSetting(function () { state.params.sample_rate = 48000; });
+      ctx.changeSetting(function () {
+        state.sections.forEach(function (section) { section.sample_rate = 48000; });
+      });
       var legend = $("rate-legend");
       assert(legend && /48/.test(legend.textContent), "legend not updated");
       assert(doc.querySelectorAll("#rate-chips input:checked").length === 0,
         "a preset chip should not be selected for 48 kHz");
 
-      ctx.changeSetting(function () { state.params.sample_rate = 44100; });
+      ctx.changeSetting(function () {
+        state.sections.forEach(function (section) { section.sample_rate = 44100; });
+      });
       assert(/^Sample rate$/.test($("rate-legend").textContent), "legend not restored");
     });
 
-    check("undo then redo restores the format", function () {
-      ctx.undo();
-      assert(state.params.sample_rate !== 44100 || state.params.sample_size !== 16,
-        "undo did not roll back");
-      ctx.redo();
-      assert(state.params.sample_rate === 22050 || state.params.sample_rate === 44100,
-        "redo did not restore the rate (got " + state.params.sample_rate +
-        ", redo stack " + state.redo.length + ", undo stack " + state.undo.length + ")");
+    check("selecting a section changes what the panel edits", function () {
+      var original = state.sections[1].p_base_freq;
+      state.sections[1].p_base_freq = 0.99;
+
+      ctx.selectSection(1);
+      assert(state.active === 1, "active section not switched");
+      var shown = Number($("p-p_base_freq").value);
+      assert(shown > 900, "panel slider did not follow section 2 (" + shown + ")");
+
+      ctx.selectSection(0);
+      state.sections[1].p_base_freq = original;
+      ctx.renderAll(true, 8);
+      return "panel follows the selected section";
     });
 
-    check("permalink round-trips through the app", function () {
-      var back = SFX.codec.decode(SFX.codec.encode(state.params));
-      assert(back, "decode failed");
-      assert(Math.abs(back.p_base_freq - state.params.p_base_freq) < 0.005, "base freq lost");
-      assert(back.sample_rate === state.params.sample_rate, "rate lost");
-      assert(back.sample_size === state.params.sample_size, "depth lost");
+    check("undo then redo restores the format", function () {
+      assert(state.sections[0].sample_rate === 44100, "expected 44.1 kHz before undo");
+
+      ctx.undo();
+      assert(state.sections[0].sample_rate === 48000, "undo did not restore 48 kHz");
+      assert(state.sections[2].sample_rate === 48000, "all sections should follow the undo");
+
+      ctx.redo();
+      assert(state.sections[0].sample_rate === 44100, "redo did not restore 44.1 kHz");
+      return "48 kHz -> 44.1 kHz restored";
+    });
+
+    check("permalink round-trips the whole patch", function () {
+      var code = SFX.codec.encodePatch({ sections: state.sections, enabled: state.enabled });
+      assert(code.charAt(0) === "4", "expected a v4 payload");
+
+      var back = SFX.codec.decodePatch(code);
+      assert(back && back.sections.length === 3, "sections lost");
+      assert(back.enabled[0] === state.enabled[0] && back.enabled[1] === state.enabled[1],
+        "enabled flags lost");
+      approx(back.sections[0].p_base_freq, state.sections[0].p_base_freq, 0.005,
+        "section 1 mismatch");
+      approx(back.sections[2].p_env_decay, state.sections[2].p_env_decay, 0.005,
+        "section 3 mismatch");
     });
 
     check("a reduced preview is upgraded before export", function () {
       ctx.renderAll(false, 2);
-      assert(state.rendered.oversampling === 2, "preview was not reduced");
+      assert(state.renderOS === 2, "preview was not reduced");
       ctx.ensureFullQuality();
-      assert(state.rendered.oversampling === 8, "quality guard did not upgrade");
+      assert(state.renderOS === 8, "quality guard did not upgrade");
     });
 
-    check("WAV export produces a valid header", function () {
-      var exported = SFX.exporter.toWav(state.params, { normalize: state.normalize });
+    check("WAV export matches the mix", function () {
+      var exported = SFX.exporter.toWavPatch(
+        { sections: state.sections, enabled: state.enabled }, { normalize: state.normalize });
       var view = new DataView(exported.bytes.buffer);
       assert(view.getUint32(0, true) === 0x46464952, "not a RIFF file");
-      assert(view.getUint32(24, true) === state.params.sample_rate, "wrong rate in header");
-      assert(view.getUint16(34, true) === state.params.sample_size, "wrong depth in header");
-      assert(exported.byteLength === 44 + exported.frames * (state.params.sample_size / 8),
-        "wrong byte length");
+      assert(view.getUint32(24, true) === state.sections[0].sample_rate, "wrong rate");
+      assert(view.getUint16(34, true) === state.sections[0].sample_size, "wrong depth");
+      assert(exported.frames === state.rendered.frames,
+        "export length differs from the mix (" + exported.frames + " vs " + state.rendered.frames + ")");
+    });
+
+    check("enabling a second section changes the mix", function () {
+      ctx.renderAll(true, 8);
+      var before = { frames: state.rendered.frames, count: state.rendered.count };
+      assert(before.count === 1, "expected one enabled section, got " + before.count);
+
+      ctx.toggleSection(1, true);
+      assert(state.enabled[1] === true, "section 2 not enabled");
+      assert(state.rendered.count === 2, "mix did not include section 2");
+      assert(state.rendered.frames >= before.frames, "mix lost duration");
+
+      ctx.toggleSection(1, false);
+      assert(state.rendered.count === 1, "section 2 not disabled again");
+      return "count 1 -> 2 -> 1";
+    });
+
+    check("disabling every section empties the mix", function () {
+      ctx.toggleSection(0, false);
+      assert(state.rendered.frames === 0, "mix should be empty");
+      assert(state.preview === null, "preview should be null");
+
+      ctx.toggleSection(0, true);
+      assert(state.rendered.frames > 0, "mix did not come back");
+      return "empty mix handled";
     });
 
     check("preferences round-trip", function () {
@@ -160,19 +237,23 @@
       assert(dupes.length === 0, "duplicates: " + dupes.join(", "));
     });
 
-    check("bank saves, lists and removes a sound", function () {
+    check("bank saves a patch and lists it", function () {
       SFX.bank.useStorage(memoryStorage());
-      var entry = SFX.bank.add(state.params, "selftest");
-      assert(entry, "bank.add failed");
+      var entry = SFX.bank.add({ sections: state.sections, enabled: state.enabled }, "selftest");
+      assert(entry && entry.patch.sections.length === 3, "patch not stored");
+
       var list = SFX.bank.all();
-      assert(list.length === 1, "expected one entry, got " + list.length);
-      assert(list[0].name === "selftest", "entry not listed first");
+      assert(list.length === 1 && list[0].name === "selftest", "entry not listed");
+      assert(list[0].patch.enabled[0] === state.enabled[0], "flags lost");
+      approx(list[0].patch.sections[1].p_base_freq, state.sections[1].p_base_freq, 1e-9,
+        "section 2 not stored verbatim");
+
       SFX.bank.remove(entry.id);
       assert(SFX.bank.all().length === 0, "entry not removed");
       SFX.bank.useStorage(null);
     });
 
-    check("zip pack of one WAV is well formed", function () {
+    check("zip pack of one patch is well formed", function () {
       var wav = SFX.wav.encode(new Uint8Array(64), { sampleRate: 8000, bits: 8 });
       var bytes = SFX.zip.create([{ name: "a.wav", data: new Uint8Array(wav.buffer) }]);
       var view = new DataView(bytes.buffer);

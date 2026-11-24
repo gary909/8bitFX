@@ -41,12 +41,9 @@
     return out;
   }
 
-  /* Each knob is quantised to a byte: at most half a step (0.2 % of its range)
-     away from the original — inaudible, but 3.5x shorter than the v1 payload. */
-  function encode(p) {
+  /* one section body: wave type, 23 quantised parameters, 16-bit rate, flags, seed */
+  function sectionBytes(p) {
     var api = P();
-    p = api.coerce(p);
-
     var bytes = [p.wave_type & 3], i, d, v, b;
 
     for (i = 0; i < api.LINK_KEYS.length; i++) {
@@ -67,11 +64,10 @@
     var seed = p.noise_seed >>> 0;
     bytes.push(seed & 0xff, (seed >>> 8) & 0xff, (seed >>> 16) & 0xff, (seed >>> 24) & 0xff);
 
-    return "3" + b64encodeBytes(bytes);
+    return bytes;
   }
 
-  /* v3: the sample rate is a 16-bit field, so any rate in 4–96 kHz survives */
-  function decodeV3(bytes) {
+  function readSection(bytes) {
     var api = P();
     if (!bytes || bytes.length !== api.LINK_KEYS.length + 8) { return null; }
 
@@ -92,6 +88,62 @@
     p.noise_seed = (bytes[at] | (bytes[at + 1] << 8) | (bytes[at + 2] << 16) |
                     (bytes[at + 3] << 24)) >>> 0;
     return api.coerce(p);
+  }
+
+  /* Each knob is quantised to a byte: at most half a step (0.2 % of its range)
+     away from the original — inaudible, but 3.5x shorter than the v1 payload. */
+  function encode(p) {
+    return "3" + b64encodeBytes(sectionBytes(P().coerce(p)));
+  }
+
+  function decodeV3(bytes) { return readSection(bytes); }
+
+  /* v4: a whole patch — one flags byte (enabled sections) + three bodies */
+  function encodePatch(patch) {
+    var api = P();
+    var sections = (patch && patch.sections) || [];
+    var enabled = (patch && patch.enabled) || [];
+    var bytes = [0], i, j, body;
+
+    for (i = 0; i < 3; i++) {
+      if (enabled[i]) { bytes[0] |= (1 << i); }
+    }
+    for (i = 0; i < 3; i++) {
+      body = sectionBytes(api.coerce(sections[i] || api.defaults(0)));
+      for (j = 0; j < body.length; j++) { bytes.push(body[j]); }
+    }
+
+    return "4" + b64encodeBytes(bytes);
+  }
+
+  function decodePatch(str) {
+    var api = P();
+    var s = String(str || "");
+    if (!s) { return null; }
+
+    if (s.charAt(0) === "4") {
+      var bytes, bodyLen = api.LINK_KEYS.length + 8, sections = [], i, section;
+      try { bytes = b64decodeBytes(s.substring(1)); } catch (e) { return null; }
+      if (!bytes || bytes.length !== 1 + bodyLen * 3) { return null; }
+
+      for (i = 0; i < 3; i++) {
+        section = readSection(bytes.slice(1 + i * bodyLen, 1 + (i + 1) * bodyLen));
+        if (!section) { return null; }
+        sections.push(section);
+      }
+      return {
+        sections: sections,
+        enabled: [!!(bytes[0] & 1), !!(bytes[0] & 2), !!(bytes[0] & 4)]
+      };
+    }
+
+    /* older payloads describe a single sound: use it as section 1 */
+    var single = decode(s);
+    if (!single) { return null; }
+    return {
+      sections: [single, api.clone(single), api.clone(single)],
+      enabled: [true, false, false]
+    };
   }
 
   function decodeV2(bytes) {
@@ -151,6 +203,8 @@
   return {
     encode: encode,
     decode: decode,
+    encodePatch: encodePatch,
+    decodePatch: decodePatch,
     encodeLegacy: encodeLegacy,
     b64encode: b64encode,
     b64decode: b64decode

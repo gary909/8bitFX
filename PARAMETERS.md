@@ -106,10 +106,11 @@ one-pole (unity gain at DC), so "OFF" really is off.
 | `sample_size` | 8 or 16 | 8 | bit depth of the quantised output |
 | `noise_seed` | uint32 | random | seeds the 32-entry noise table (makes renders reproducible) |
 
-## JSON sound file
+## Section parameters (JSON)
 
-`Save .json` writes a flat object using exactly these keys, which is also the shape sfxr
-reads, so sounds can be moved between tools:
+Each section is a flat object using exactly these keys — the same shape sfxr reads — and the
+patch file wraps three of them (see “Patch JSON” below). Loading a flat object applies it to the
+section you are currently editing, so sounds can be moved between tools in both directions.
 
 ```json
 {
@@ -129,17 +130,39 @@ Unknown keys are ignored and out-of-range values are clamped on load.
 
 ## Permalink payload
 
-`Copy link` stores everything in the URL fragment:
+`Copy link` stores the whole patch in the URL fragment:
 
 | Version | Format | Size |
 |---|---|---|
-| **v3** (current) | `#3` + base64url of 31 bytes: wave type, 23 parameters as bytes, 16-bit sample rate, flags (depth + two switches), 4-byte seed | ~43 chars |
-| v2 | `#2` + same layout with a 4-entry rate index | ~41 chars |
+| **v4** (current) | `#4` + base64url of 94 bytes: one flags byte (which sections are enabled) then three 31-byte section bodies | ~126 chars |
+| v3 | `#3` + a single 31-byte body | ~43 chars |
+| v2 | `#2` + a single body with a 4-entry rate index | ~41 chars |
 | v1 | base64url of a JSON array | ~147 chars |
 
-All three decode, so links made by any earlier build still open. Byte-quantising a knob
-shifts it by at most 1/510 of its range — inaudible, but it is why a link can differ from the
-original by a fraction of a step.
+Each section body is: wave type, 23 parameters as bytes, a 16-bit sample rate, a flags byte
+(bit depth + the two switches) and a 4-byte noise seed. Byte-quantising a knob shifts it by at
+most 1/510 of its range — inaudible, but it is why a link can differ from the original by a
+fraction of a step.
+
+Older payloads (v3/v2/v1) describe a single sound, so they load as section 1 with sections 2 and
+3 present but unchecked — the sound you hear is identical.
+
+## Patch JSON
+
+`Save .json` writes the three sections plus which ones are mixed:
+
+```json
+{
+  "format": "8bitfx-layers",
+  "version": 2,
+  "name": "explosion",
+  "enabled": [true, true, false],
+  "sections": [ { "wave_type": 3, "p_env_attack": 0, ... }, { ... }, { ... } ]
+}
+```
+
+Each entry of `sections` is a flat object using exactly the parameter keys above. Loading a file
+without the `format` field (a plain sfxr sound) applies it to the section currently being edited.
 
 ## Export naming
 

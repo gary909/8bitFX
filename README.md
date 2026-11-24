@@ -37,9 +37,10 @@ chips · `bits`: 8, 16.)
 | | |
 |---|---|
 | **Generators** | Pickup/Coin, Laser/Shoot, Explosion, Power-Up, Hit/Hurt, Jump, Blip/Select, Synth, Tone, Random — each randomised like sfxr's own presets |
+| **3 synth sections** | Every section is a full voice with its own waveform, its own ▶ and a mix checkbox; the master ▶ plays the ticked sections mixed together |
 | **Mutate** | Nudges every parameter a little so you can evolve a sound instead of re-rolling it |
 | **23 sliders + 2 switches** | Waveform, envelope (attack / sustain / punch / decay), start frequency, min frequency, slide, delta slide, vibrato, arpeggio, duty cycle + sweep, retrigger, flanger, low-pass + high-pass filters, gain, DC blocker, waveform levelling |
-| **Live scope** | Waveform preview redrawn on every change; drags render at reduced oversampling so long sounds stay responsive |
+| **Live scope** | Big scope shows the mix; each section card carries its own mini scope. Drags render at reduced oversampling so long sounds stay responsive |
 | **8-bit / 16-bit** | Sample size toggle, plus 44.1 k / 22.05 k / 11.025 k / 8 k sample rates |
 | **Export** | WAV (mono PCM), JSON (sfxr-compatible parameter object), compact shareable permalink, and a **ZIP pack** of every banked sound |
 | **Bank** | Save sounds to a persistent strip (localStorage, 24 slots), click to reload, `×` to delete |
@@ -66,18 +67,18 @@ Sliders also respond to a **double-click**, which restores that parameter's defa
 ## Exporting
 
 - **WAV** — mono PCM at the selected rate/depth, named like `laserShoot-8bit-44k.wav`.
+  It contains the **mix of the ticked sections** — exactly what the master ▶ plays.
 - **Normalize on export** (on by default) scales the sound to −1 dBFS so it sits at a
   comfortable level in a game. Turn it off if you want sfxr's raw, quieter output.
-- **Save / Load .json** — the same parameter keys sfxr uses (`p_env_attack`, `p_base_freq`, …),
-  so sound definitions can be moved between tools.
-- **Copy link** — the parameter set travels in the URL fragment as a **31-byte payload**
-  (~43 characters, starting `#3…`). Each knob is quantised to 1/255 of its range and the noise
-  seed is carried, so a link reproduces the sound sample-for-sample; the sample rate is a full
-  16-bit field, so 48 kHz survives too. Links made by older builds (`#2…` and the long
-  base64-JSON form) still open.
-- **Pack .zip** — every banked sound as a WAV in one archive. The ZIP writer is ~90 lines with no
-  dependencies (store method, real CRC-32), and the archive has been verified against Windows'
-  own `Expand-Archive`.
+- **Save / Load .json** — `Save` writes the whole **patch** (`format: "8bitfx-layers"`, three
+  sections + enabled flags). Loading a flat sfxr parameter object still works and drops it into
+  the section you are editing, so sounds can be moved between tools in both directions.
+- **Copy link** — the patch travels in the URL fragment as a **v4 payload** (three sections +
+  flags, ~126 characters). Links made by older builds (`#3…`, `#2…` and the long base64-JSON
+  form) still open as a single enabled section.
+- **Pack .zip** — every banked patch as a WAV in one archive, rendered one sound per task with a
+  progress toast. The ZIP writer is ~90 lines with no dependencies (store method, real CRC-32),
+  and the archive has been verified against Windows' own `Expand-Archive`.
 
 ## How the synthesis works
 
@@ -111,17 +112,19 @@ share links reproduce a sound bit-for-bit.
 
 ## Tests
 
-Open `tests.html` for the in-browser suite (41 checks: WAV headers, export helpers, determinism,
+Open `tests.html` for the in-browser suite (46 checks: WAV headers, export helpers, determinism,
 preset audibility, quantisation ranges, pitch accuracy, duration mapping, exact 8 kHz rate,
-parameter codec (v3 payloads plus legacy links), non-preset sample rates, slider mapping, panel
+parameter codec (single-sound, three-section patch links, legacy links), non-preset sample rates,
+mixer gain/tail/empty-mix maths, patch WAV export, bank migration, slider mapping, panel
 construction, mutation validity, DC blocking for long and short sounds, waveform levelling, the
 anti-click fade, ZIP structure and CRC-32, bank persistence, clipping detection, and a 120-sound
 fuzz pass).
 
 No Node needed — `test.cmd` runs two headless passes (the unit suite, then `index.html?selftest=1`
-and its 14 app checks: chips, custom-rate legend, undo/redo, permalinks, the export-quality guard,
-the WAV header, preferences, label coverage, duplicate IDs, horizontal overflow, the bank and the
-ZIP writer) and exits non-zero if either fails. Manually:
+and its 18 app checks: panel and section cards, shared rate/depth chips, the custom-rate legend,
+section selection, enabling/disabling sections, empty mixes, undo/redo, patch permalinks, the
+export-quality guard, WAV export length, preferences, label coverage, duplicate IDs, horizontal
+overflow, the bank and the ZIP writer) and exits non-zero if either fails. Manually:
 
 ```
 chrome --headless=new --disable-gpu --virtual-time-budget=40000 --dump-dom tests.html
@@ -153,7 +156,11 @@ The sound is meant to match, but a few implementation details are cleaner than t
 - **Waveform levelling is on by default** — square already peaks at ±0.5 while saw/sine/noise peak
   at ±1, so sfxr's square presets are ~6 dB quieter than the others. Levelling scales all four to
   ±0.5 for consistent preset levels; switch it off to restore the original imbalance.
-- **Permalinks use a compact 30-byte payload (v2)**; the previous JSON payload is still decoded.
+- **Permalinks use a compact binary payload** — v4 (three sections) now, with the v3/v2/v1
+  formats still decoded as a single enabled section.
+- **Sections mix at 1/n** — the master sum is divided by the number of enabled sections, so one
+  section sounds exactly as loud as it did before layering and three don't clip into the
+  quantiser. A section card's ▶ ignores the mix checkbox.
 
 ## Layout
 
@@ -170,6 +177,7 @@ js/export.js        parameters -> WAV bytes in one call (export, pack, self-test
 js/io.js            downloads, clipboard, filenames, JSON sanity check
 js/shortcuts.js     keyboard map
 js/synth.js         the synthesis engine + quantiser
+js/mix.js           mixes the sections (sum, 1/n gain, peak)
 js/wav.js           RIFF/WAVE encoder (8-bit unsigned, 16-bit signed)
 js/presets.js       generator heuristics + mutate()
 js/audio.js         Web Audio playback

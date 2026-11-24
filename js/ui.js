@@ -251,6 +251,89 @@
     }
   }
 
+  /* Three section cards: include checkbox, mini scope, name, play button.
+     handlers = { select(index), toggle(index, on), play(index) }
+     returns { canvases, draw(index, samples, peak), sync({ names, enabled, active }) } */
+  function renderSections(container, handlers) {
+    var cards = [], canvases = [], i;
+
+    while (container.firstChild) { container.removeChild(container.firstChild); }
+
+    function makeCard(index) {
+      var card = document.createElement("div");
+      card.className = "section-card";
+
+      var include = document.createElement("label");
+      include.className = "section-include";
+      include.title = "Include in the master mix";
+
+      var box = document.createElement("input");
+      box.type = "checkbox";
+      box.setAttribute("aria-label", "Include section " + (index + 1) + " in the mix");
+      box.addEventListener("change", function () { handlers.toggle(index, box.checked); });
+
+      var number = document.createElement("span");
+      number.textContent = String(index + 1);
+
+      include.appendChild(box);
+      include.appendChild(number);
+
+      var canvas = document.createElement("canvas");
+      canvas.className = "section-scope";
+      canvas.width = 220;
+      canvas.height = 56;
+      canvas.setAttribute("role", "img");
+      canvas.setAttribute("aria-label", "Section " + (index + 1) + " waveform");
+
+      var name = document.createElement("span");
+      name.className = "section-name";
+
+      var pick = document.createElement("button");
+      pick.type = "button";
+      pick.className = "section-pick";
+      pick.setAttribute("aria-label", "Edit section " + (index + 1));
+      pick.appendChild(canvas);
+      pick.appendChild(name);
+      pick.addEventListener("click", function () { handlers.select(index); });
+
+      var play = document.createElement("button");
+      play.type = "button";
+      play.className = "section-play";
+      play.textContent = "\u25B6";
+      play.setAttribute("aria-label", "Play section " + (index + 1));
+      play.addEventListener("click", function () { handlers.play(index); });
+
+      card.appendChild(include);
+      card.appendChild(pick);
+      card.appendChild(play);
+      container.appendChild(card);
+
+      cards.push(card);
+      canvases.push(canvas);
+    }
+
+    for (i = 0; i < 3; i++) { makeCard(i); }
+
+    return {
+      canvases: canvases,
+      draw: function (index, samples, peak) {
+        if (canvases[index]) { drawWaveform(canvases[index], samples, peak); }
+      },
+      sync: function (state) {
+        for (var n = 0; n < cards.length; n++) {
+          var box = cards[n].getElementsByTagName("input")[0];
+          var label = cards[n].getElementsByClassName("section-name")[0];
+
+          if (box) { box.checked = !!state.enabled[n]; }
+          if (label) { label.textContent = state.names[n] || ("Section " + (n + 1)); }
+          cards[n].className = "section-card" +
+            (n === state.active ? " is-active" : "") +
+            (state.enabled[n] ? "" : " is-muted");
+        }
+      }
+    };
+  }
+
   /* Oscilloscope: min/max envelope per pixel column, snapped to whole pixels
      so it reads like a chunky 8-bit screen. */
   function drawWaveform(canvas, samples, peak, size) {
@@ -318,6 +401,7 @@
     buildParams: buildParams,
     drawWaveform: drawWaveform,
     renderBank: renderBank,
+    renderSections: renderSections,
     toSlider: toSlider,
     fromSlider: fromSlider,
     WAVE_LABELS: WAVE_LABELS

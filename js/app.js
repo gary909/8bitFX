@@ -6,32 +6,54 @@
   var doc = root.document;
 
   var state = {
-    params: null,
-    rendered: null,
-    preview: null,      /* quantised, unnormalised — what you hear */
-    name: "sound",
+    sections: [],                 /* three independent parameter sets */
+    enabled: [true, false, false],/* included in the master mix */
+    active: 0,                    /* which section the parameter panel edits */
+    names: ["Section 1", "Section 2", "Section 3"],
+    layers: [null, null, null],   /* per-section render cache */
+    layerKeys: ["", "", ""],
+    rendered: null,               /* the mix — big scope + master play */
+    preview: null,                /* quantised mix */
     normalize: true,
     undo: [],
     redo: [],
     batch: [],
-    compareParams: null,   /* the sound before the current edit, for A/B */
+    comparePatch: null,           /* the patch before the current edit, for A/B */
     packing: false,
     editSnapshot: null,
     frame: 0,
     toastTimer: 0,
-    signature: "",      /* params fingerprint of the last render */
+    signature: "",
     lastHash: "",
     canvasSize: null
   };
 
+  var SECTION_COUNT = 3;
   var UNDO_DEPTH = 60;
   var TOAST_MS = 1800;
   var CLIP_RATIO = 0.005;   /* warn about clipping above this fraction of frames */
 
   var panel = null;
+  var strip = null;
   var els = {};
 
   function $(id) { return doc.getElementById(id); }
+
+  /* ---------- patch helpers ---------- */
+  function activeParams() { return state.sections[state.active]; }
+
+  function eachSection(fn) {
+    for (var i = 0; i < SECTION_COUNT; i++) { fn(state.sections[i], i); }
+  }
+
+  function patch() { return { sections: state.sections, enabled: state.enabled }; }
+
+  function sectionSignature(p) { return JSON.stringify(SFX.params.serialize(p)); }
+
+  function patchSignature() {
+    return state.sections.map(sectionSignature).join("|") + "#" +
+      state.enabled.join(",") + "#" + state.active;
+  }
 
   function toast(message) {
     if (!els.toast) { return; }
@@ -43,7 +65,9 @@
     }, TOAST_MS);
   }
 
-  function fileName(ext) { return SFX.io.fileName(state.name, state.params, ext); }
+  function fileName(ext) {
+    return SFX.io.fileName(state.names[state.active], activeParams(), ext);
+  }
 
   function download(blob, name) { SFX.io.download(blob, name); }
 
@@ -51,7 +75,31 @@
 
   /* ---------- undo / redo ---------- */
   function snapshot() {
-    return JSON.stringify({ name: state.name, params: SFX.params.serialize(state.params) });
+    return JSON.stringify({
+      active: state.active,
+      names: state.names,
+      enabled: state.enabled,
+      sections: state.sections.map(SFX.params.serialize)
+    });
+  }
+
+  /* normalise any patch-ish object into state */
+  function acceptPatch(data, keepNames) {
+    var api = SFX.params;
+    var sections = (data && data.sections) || [data];
+    var enabled = (data && data.enabled) || [true, false, false];
+    var i;
+
+    state.sections = [];
+    for (i = 0; i < SECTION_COUNT; i++) {
+      state.sections.push(api.coerce(sections[i] || sections[0]));
+    }
+    state.enabled = [];
+    for (i = 0; i < SECTION_COUNT; i++) { state.enabled.push(!!enabled[i]); }
+    if (!keepNames) { state.names = ["Section 1", "Section 2", "Section 3"]; }
+    state.active = 0;
+    state.layers = [null, null, null];
+    state.layerKeys = ["", "", ""];
   }
 
   function updateHistoryButtons() {
@@ -66,10 +114,12 @@
     if (state.undo.length > UNDO_DEPTH) { state.undo.shift(); }
     state.redo.length = 0;              /* a new action invalidates redo */
 
-    /* remember the "before" sound so A can compare against it */
+    /* remember the "before" patch so A can compare against it */
     try {
       var entry = JSON.parse(serialized);
-      state.compareParams = SFX.params.coerce(entry.params || entry);
+      state.comparePatch = entry.sections
+        ? { sections: entry.sections, enabled: entry.enabled || [true, false, false] }
+        : { sections: [entry.params || entry], enabled: [true, false, false] };
     } catch (e) { /* ignore */ }
 
     updateHistoryButtons();
@@ -77,10 +127,20 @@
 
   function restore(serialized) {
     var entry = JSON.parse(serialized);
-    state.params = SFX.params.coerce(entry.params || entry);
-    if (entry.name) { state.name = entry.name; }
+
+    if (entry.sections) {
+      state.sections = entry.sections.map(SFX.params.coerce);
+      state.enabled = (entry.enabled || [true, false, false]).slice(0, SECTION_COUNT);
+      if (entry.names) { state.names = entry.names.slice(); }
+      if (typeof entry.active === "number") {
+        state.active = Math.max(0, Math.min(SECTION_COUNT - 1, entry.active));
+      }
+    } else {
+      acceptPatch({ sections: [entry.params || entry], enabled: [true, false, false] }, true);
+    }
+
     state.editSnapshot = null;
-    renderAll();
+    renderAll(true, 8);
     writeHash();
   }
 
@@ -101,8 +161,8 @@
   /* ---------- generation ---------- */
   function applyParams(next, name) {
     pushUndo(snapshot());
-    state.params = SFX.params.coerce(next);
-    if (name) { state.name = name; }
+    state.sections[state.active] = SFX.params.coerce(next);
+    if (name) { state.names[state.active] = name; }
     state.editSnapshot = null;
     renderAll();
     writeHash();
@@ -116,7 +176,7 @@
 
   function mutate() {
     var before = snapshot();
-    state.params = SFX.presets.mutate(state.params, SFX.rng.newSeed());
+    state.sections[state.active] = SFX.presets.mutate(activeParams(), SFX.rng.newSeed());
     pushUndo(before);
     state.editSnapshot = null;
     renderAll();
@@ -127,21 +187,36 @@
   /* ---------- playback ---------- */
   function play() {
     ensureFullQuality();
-    if (!state.preview) { return; }
+    if (!state.preview) { toast("Enable a section first"); return; }
     var samples = SFX.synth.dequantize(state.preview.pcm, state.preview.bits);
-    if (!SFX.audio.play(samples, state.params.sample_rate, 1)) {
+    if (!SFX.audio.play(samples, state.sections[0].sample_rate, 1)) {
       toast("Web Audio unavailable");
     }
   }
 
-  /* A: play the sound as it was before the last change */
-  function comparePlay() {
-    if (!state.compareParams) { toast("No previous sound yet"); return; }
+  /* a section card's ▶ plays that section on its own, whatever its mix checkbox says */
+  function playSection(index) {
+    var p = state.sections[index];
+    if (!p) { return; }
 
-    var p = state.compareParams;
     var r = SFX.synth.render(p, { oversampling: 8 });
     var q = SFX.synth.quantize(r.float, p.sample_size, { normalize: false, peak: r.peak });
     if (!SFX.audio.play(SFX.synth.dequantize(q.pcm, q.bits), p.sample_rate, 1)) {
+      toast("Web Audio unavailable");
+    }
+  }
+
+  /* A: play the patch as it was before the last change */
+  function comparePlay() {
+    var previous = state.comparePatch;
+    if (!previous) { toast("No previous sound yet"); return; }
+
+    var rendered = SFX.exporter.renderPatch(previous, { oversampling: 8 });
+    if (!rendered.mixed.frames) { toast("Previous patch had no enabled sections"); return; }
+
+    var q = SFX.synth.quantize(rendered.mixed.float, rendered.params.sample_size,
+      { normalize: false, peak: rendered.mixed.peak });
+    if (!SFX.audio.play(SFX.synth.dequantize(q.pcm, q.bits), rendered.params.sample_rate, 1)) {
       toast("Web Audio unavailable");
       return;
     }
@@ -165,30 +240,46 @@
   }
 
   function paramsSignature() {
-    return JSON.stringify(SFX.params.serialize(state.params));
+    return patchSignature();
   }
 
-  /* renderAll(force): renders the current parameters. Safe to call often — it
-     bails out when nothing changed and cancels any queued frame, so an edit can
-     never cause two renders for one change. */
+  /* renderAll(force): renders the three sections (each cached on its own
+     signature), mixes the enabled ones, then redraws everything. Bails out when
+     nothing changed and cancels any queued frame, so one edit = one render. */
   function renderAll(force, oversampling) {
     var os = oversampling || 8;
     cancelFrame();
 
     var signature = paramsSignature() + "@" + os;
     if (!force && state.rendered && signature === state.signature) {
-      if (panel) { panel.sync(state.params); }
+      if (panel) { panel.sync(activeParams()); }
+      syncSections();
       return;
     }
 
     try {
-      var p = state.params;
-      var r = SFX.synth.render(p, { oversampling: os });
-      state.rendered = r;
-      state.preview = SFX.synth.quantize(r.float, p.sample_size, { normalize: false, peak: r.peak });
+      var renders = [], i, key, layer;
+
+      for (i = 0; i < SECTION_COUNT; i++) {
+        key = sectionSignature(state.sections[i]) + "@" + os;
+        if (state.layerKeys[i] !== key || !state.layers[i]) {
+          state.layers[i] = SFX.synth.render(state.sections[i], { oversampling: os });
+          state.layerKeys[i] = key;
+        }
+        renders.push(state.layers[i]);
+      }
+
+      var mixed = SFX.mix.combine(renders, state.enabled);
+      state.rendered = mixed;
+      state.renderOS = os;
+      state.preview = mixed.frames
+        ? SFX.synth.quantize(mixed.float, state.sections[0].sample_size,
+            { normalize: false, peak: mixed.peak })
+        : null;
       state.signature = signature;
 
-      if (panel) { panel.sync(p); }
+      if (panel) { panel.sync(activeParams()); }
+      syncSections();
       draw();
       updateStats();
       syncChips();
@@ -198,20 +289,25 @@
     }
   }
 
-  /* Long sounds are expensive to render at the full 8x oversampling, so live
-     drags drop to 4x/2x; the commit path always renders at full quality. */
+  /* Longest enabled section decides the preview quality while dragging. */
   function previewOversampling() {
-    var k = SFX.params.toKnobs(state.params);
-    var seconds = k.attack + k.sustain + k.decay;
-    if (seconds > 1.2) { return 2; }
-    if (seconds > 0.6) { return 4; }
+    var longest = 0, i, k;
+
+    for (i = 0; i < SECTION_COUNT; i++) {
+      if (!state.enabled[i]) { continue; }
+      k = SFX.params.toKnobsCoerced(state.sections[i]);
+      longest = Math.max(longest, k.attack + k.sustain + k.decay);
+    }
+
+    if (longest > 1.2) { return 2; }
+    if (longest > 0.6) { return 4; }
     return 8;
   }
 
   /* A drag can leave a reduced-oversampling preview in `state.rendered`. Anything
      the user hears on purpose or saves must come from the full-quality render. */
   function ensureFullQuality() {
-    if (state.rendered && state.rendered.oversampling !== 8) {
+    if (state.rendered && state.renderOS !== 8) {
       renderAll(true, 8);
     }
   }
@@ -232,8 +328,19 @@
   }
 
   function draw() {
-    if (!els.canvas || !state.rendered) { return; }
-    SFX.ui.drawWaveform(els.canvas, state.rendered.float, state.rendered.peak, state.canvasSize);
+    if (!els.canvas) { return; }
+    if (state.rendered) {
+      SFX.ui.drawWaveform(els.canvas, state.rendered.float, state.rendered.peak, state.canvasSize);
+    }
+    drawSectionScopes();
+  }
+
+  function drawSectionScopes() {
+    if (!strip) { return; }
+    for (var i = 0; i < SECTION_COUNT; i++) {
+      var layer = state.layers[i];
+      strip.draw(i, layer ? layer.float : null, layer ? layer.peak : 1);
+    }
   }
 
   /* measured once per layout change instead of once per frame */
@@ -244,23 +351,33 @@
   }
 
   function updateStats() {
-    var r = state.rendered, p = state.params;
+    var r = state.rendered;
     if (!r || !els.duration) { return; }
+
+    var p = state.sections[0];
     var bytes = 44 + r.frames * (p.sample_size / 8);
-    var clipped = state.preview.clipped;
+    var clipped = state.preview ? state.preview.clipped : 0;
     var significant = r.frames > 0 && clipped > r.frames * CLIP_RATIO;
+    var capped = false, i;
+
+    for (i = 0; i < SECTION_COUNT; i++) {
+      if (state.enabled[i] && state.layers[i] && state.layers[i].capped) { capped = true; }
+    }
 
     els.duration.textContent = Math.round(r.duration * 1000) + " ms";
     els.samples.textContent = String(r.frames);
     els.size.textContent = bytes < 1024 ? (bytes + " B") : ((bytes / 1024).toFixed(1) + " kB");
     els.clipped.textContent = String(clipped);
     els.clipHint.hidden = !significant;
-    if (els.scopeEmpty) { els.scopeEmpty.hidden = (r.frames > 0); }
-    if (els.capHint) { els.capHint.hidden = !r.capped; }
+    if (els.scopeEmpty) {
+      els.scopeEmpty.hidden = (r.frames > 0);
+      els.scopeEmpty.textContent = "No sections enabled \u2014 tick a box";
+    }
+    if (els.capHint) { els.capHint.hidden = !capped; }
   }
 
   function writeHash() {
-    var code = "#" + SFX.codec.encode(state.params);
+    var code = "#" + SFX.codec.encodePatch(patch());
     if (code === state.lastHash) { return; }
     state.lastHash = code;
 
@@ -282,7 +399,7 @@
   /* ---------- control handlers ---------- */
   function onInput(key, value) {
     if (!state.editSnapshot) { state.editSnapshot = snapshot(); }
-    state.params[key] = value;
+    activeParams()[key] = value;
     scheduleRender();
   }
 
@@ -303,17 +420,31 @@
   }
 
   /* ---------- export ---------- */
+  function patchJson() {
+    return {
+      format: "8bitfx-layers",
+      version: 2,
+      name: state.names[state.active],
+      enabled: state.enabled,
+      sections: state.sections.map(SFX.params.serialize)
+    };
+  }
+
   function exportWav() {
-    var out = SFX.exporter.toWav(state.params, { normalize: state.normalize });
+    if (!state.rendered || !state.rendered.frames) {
+      toast("Enable a section first");
+      return;
+    }
+    var out = SFX.exporter.toWavPatch(patch(), { normalize: state.normalize });
     download(new Blob([out.bytes], { type: "audio/wav" }), fileName("wav"));
     toast("WAV " + (out.byteLength / 1024).toFixed(1) + " kB" +
       (out.clipped ? " (clipped)" : ""));
   }
 
   function exportJson() {
-    var json = JSON.stringify(SFX.params.serialize(state.params), null, 2);
+    var json = JSON.stringify(patchJson(), null, 2);
     download(new Blob([json], { type: "application/json" }), fileName("json"));
-    toast("JSON saved");
+    toast("Patch saved");
   }
 
   function importJson(file) {
@@ -322,25 +453,36 @@
       var data;
       try { data = JSON.parse(String(reader.result)); }
       catch (e) { toast("Not valid JSON"); return; }
+
+      if (data && data.format === "8bitfx-layers" && data.sections) {
+        pushUndo(snapshot());
+        acceptPatch(data);
+        renderAll(true, 8);
+        writeHash();
+        play();
+        toast("Patch loaded");
+        return;
+      }
+
       if (!SFX.io.looksLikeSoundParams(data, SFX.params.byKey)) {
         toast("That JSON doesn't look like a sound");
         return;
       }
       applyParams(SFX.params.coerce(data), "loaded");
       play();
-      toast("Sound loaded");
+      toast("Section loaded");
     };
     reader.onerror = function () { toast("Could not read file"); };
     reader.readAsText(file);
   }
 
   function copyJson() {
-    copyText(JSON.stringify(SFX.params.serialize(state.params), null, 2), "JSON copied");
+    copyText(JSON.stringify(patchJson(), null, 2), "Patch copied");
   }
 
   function copyLink() {
     var base = String(root.location.href).split("#")[0];
-    copyText(base + "#" + SFX.codec.encode(state.params), "Link copied");
+    copyText(base + "#" + SFX.codec.encodePatch(patch()), "Link copied");
   }
 
   /* ---------- sound bank ---------- */
@@ -348,7 +490,14 @@
     var grid = $("bank-grid");
     if (!grid) { return; }
     SFX.ui.renderBank(grid, SFX.bank.all(), {
-      load: function (entry) { applyParams(entry.params, entry.name); play(); },
+      load: function (entry) {
+        pushUndo(snapshot());
+        acceptPatch(entry.patch || entry.params);
+        state.names[0] = entry.name;
+        renderAll(true, 8);
+        writeHash();
+        play();
+      },
       remove: function (entry) { SFX.bank.remove(entry.id); refreshBank(); }
     });
   }
@@ -361,8 +510,8 @@
   }
 
   function saveToBank() {
-    var name = nextBankName(state.name);
-    var entry = SFX.bank.add(state.params, name);
+    var name = nextBankName(state.names[state.active]);
+    var entry = SFX.bank.add(patch(), name);
     if (!entry) { toast("Bank storage unavailable"); return; }
     refreshBank();
     toast("Saved " + name);
@@ -401,7 +550,7 @@
     function step() {
       try {
         var entry = list[index];
-        var out = SFX.exporter.toWav(entry.params, { normalize: state.normalize });
+        var out = SFX.exporter.toWavPatch(entry.patch, { normalize: state.normalize });
         files.push({
           name: safeFileBase(entry.name) + "-" + out.bits + "bit-" +
                 Math.round(out.sampleRate / 1000) + "k.wav",
@@ -439,7 +588,7 @@
         btn.textContent = String(index + 1);
         btn.setAttribute("aria-label", "Use variation " + (index + 1));
         btn.addEventListener("click", function () {
-          applyParams(state.batch[index], state.name);
+          applyParams(state.batch[index], state.names[state.active]);
           play();
         });
         grid.appendChild(btn);
@@ -448,7 +597,9 @@
   }
 
   function rollBatch() {
-    var generator = SFX.presets.GENERATORS[state.name] ? state.name : "random";
+    var generator = SFX.presets.GENERATORS[state.names[state.active]]
+      ? state.names[state.active]
+      : "random";
     var seed = SFX.rng.newSeed();
     state.batch = [];
     for (var i = 0; i < 8; i++) {
@@ -465,9 +616,30 @@
     else { dlg.setAttribute("open", "open"); }
   }
 
+  /* ---------- sections ---------- */
+  function selectSection(index) {
+    if (index === state.active || !state.sections[index]) { return; }
+    state.active = index;
+    renderAll(true, 8);
+  }
+
+  function toggleSection(index, on) {
+    if (state.enabled[index] === !!on) { return; }
+    pushUndo(snapshot());
+    state.enabled[index] = !!on;
+    renderAll(true, 8);
+    writeHash();
+    if (!state.rendered.frames) { toast("No sections enabled"); }
+  }
+
+  function syncSections() {
+    if (!strip) { return; }
+    strip.sync({ names: state.names, enabled: state.enabled, active: state.active });
+  }
+
   /* ---------- bindings ---------- */
   function syncChips() {
-    var p = state.params;
+    var p = state.sections[0] || SFX.params.defaults(0);
     var presetRate = SFX.params.RATES.indexOf(p.sample_rate) !== -1;
     var chips = doc.querySelectorAll("#rate-chips input");
     var i;
@@ -539,7 +711,9 @@
       (function (input) {
         input.addEventListener("change", function () {
           var rate = Number(input.value);
-          changeSetting(function () { state.params.sample_rate = rate; });
+          changeSetting(function () {
+            eachSection(function (section) { section.sample_rate = rate; });
+          });
         });
       }(el));
     }
@@ -550,7 +724,9 @@
       (function (input) {
         input.addEventListener("change", function () {
           var depth = Number(input.value);
-          changeSetting(function () { state.params.sample_size = depth; });
+          changeSetting(function () {
+            eachSection(function (section) { section.sample_size = depth; });
+          });
         });
       }(el));
     }
@@ -586,7 +762,7 @@
       compare: comparePlay,
       help: showHelp,
       setWave: function (index) {
-        changeSetting(function () { state.params.wave_type = index; });
+        changeSetting(function () { activeParams().wave_type = index; });
         play();
       }
     });
@@ -612,7 +788,9 @@
       ensureFullQuality: ensureFullQuality,
       changeSetting: changeSetting,
       undo: undo,
-      redo: redo
+      redo: redo,
+      selectSection: selectSection,
+      toggleSection: toggleSection
     });
   }
 
@@ -637,7 +815,7 @@
     state.normalize = SFX.prefs.load().normalize;
 
     var hash = String(root.location.hash || "").replace(/^#/, "");
-    var restored = hash ? SFX.codec.decode(hash) : null;
+    var restored = hash ? SFX.codec.decodePatch(hash) : null;
 
     /* optional ?preset=laserShoot&rate=8000&bits=16 deep links */
     var search = String(root.location.search || "");
@@ -646,26 +824,35 @@
     if (match && SFX.presets.GENERATORS[match[1]]) { requested = match[1]; }
 
     if (restored) {
-      state.params = restored;
-      state.name = "sound";
-    } else if (requested) {
-      state.params = SFX.presets.make(requested, SFX.rng.newSeed());
-      state.name = requested;
+      acceptPatch(restored);
+      state.names[0] = "sound";
     } else {
-      state.params = SFX.presets.make("random", SFX.rng.newSeed());
-      state.name = "random";
+      var preset = requested || "random";
+      var base = SFX.presets.make(preset, SFX.rng.newSeed());
+      var s;
+
+      state.sections = [];
+      for (s = 0; s < SECTION_COUNT; s++) {
+        state.sections.push(s === 0 ? base : SFX.params.clone(base));
+      }
+      state.enabled = [true, false, false];
+      state.names = [preset, "Section 2", "Section 3"];
+      state.active = 0;
     }
 
-    /* sample-rate / bit-depth overrides from the query string */
+    /* sample-rate / bit-depth overrides apply to every section */
     var rateMatch = /[?&]rate=(\d+)/.exec(search);
     if (rateMatch) {
       var rate = Number(rateMatch[1]);
       if (rate >= SFX.params.RATE_MIN && rate <= SFX.params.RATE_MAX) {
-        state.params.sample_rate = rate;
+        eachSection(function (section) { section.sample_rate = rate; });
       }
     }
     var bitsMatch = /[?&]bits=(\d+)/.exec(search);
-    if (bitsMatch) { state.params.sample_size = (Number(bitsMatch[1]) === 16) ? 16 : 8; }
+    if (bitsMatch) {
+      var depth = (Number(bitsMatch[1]) === 16) ? 16 : 8;
+      eachSection(function (section) { section.sample_size = depth; });
+    }
 
     panel = SFX.ui.buildParams($("param-groups"), {
       onInput: onInput,
@@ -673,10 +860,17 @@
       onGroupToggle: saveGroupPref
     }, SFX.prefs.load().groups);
 
+    strip = SFX.ui.renderSections($("sections"), {
+      select: selectSection,
+      toggle: toggleSection,
+      play: playSection
+    });
+
     bind();
     measureCanvas();
     syncChips();
-    renderAll(true);
+    syncSections();
+    renderAll(true, 8);
     refreshBank();
     writeHash();
 

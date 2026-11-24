@@ -31,13 +31,26 @@
 
   function useStorage(fake) { injected = fake || null; }
 
+  /* entries written before sections existed have a plain `params` object */
+  function migrate(entry) {
+    if (!entry || entry.patch || !entry.params) { return entry; }
+    var api = root.SFX.params;
+    var p = api.serialize(api.coerce(entry.params));
+    entry.patch = { sections: [p, p, p], enabled: [true, false, false] };
+    delete entry.params;
+    return entry;
+  }
+
   function read() {
     var store = storage();
     if (!store) { return []; }
     try {
       var raw = store.getItem(KEY);
       var list = raw ? JSON.parse(raw) : [];
-      return (list && list.length !== undefined) ? list : [];
+      if (!list || list.length === undefined) { return []; }
+      var i;
+      for (i = 0; i < list.length; i++) { list[i] = migrate(list[i]); }
+      return list;
     } catch (e) {
       return [];
     }
@@ -56,15 +69,27 @@
 
   function all() { return read(); }
 
-  /* returns the new entry, or null when it could not be persisted */
-  function add(params, name) {
+  /* Returns the new entry, or null when it could not be persisted.
+     Accepts a patch { sections, enabled } or a single parameter set. */
+  function add(patch, name) {
+    var api = root.SFX.params;
     var list = read();
     var now = new Date().getTime();
+    var sections = (patch && patch.sections) || [patch];
+    var enabled = (patch && patch.enabled) || [true, false, false];
+
     var entry = {
       id: "s" + now + "-" + Math.floor(Math.random() * 100000),
       name: String(name || "sound"),
       at: now,
-      params: root.SFX.params.serialize(params)
+      patch: {
+        sections: [
+          api.serialize(api.coerce(sections[0])),
+          api.serialize(api.coerce(sections[1] || sections[0])),
+          api.serialize(api.coerce(sections[2] || sections[0]))
+        ],
+        enabled: [!!enabled[0], !!enabled[1], !!enabled[2]]
+      }
     };
     list.unshift(entry);
     if (list.length > LIMIT) { list.length = LIMIT; }
