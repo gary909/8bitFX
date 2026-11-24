@@ -188,3 +188,4 @@ PARAMETERS.md       parameter reference: ranges, formulas, link format
 Algorithm and preset heuristics after **sfxr** by DrPetter, via **jsfxr** by Eric Fredricksen
 and Chris McCormick (both released under the Unlicense). This port is a from-scratch ES5
 implementation of that model. See `UNLICENSE`.
+"# 8bitFX" 
