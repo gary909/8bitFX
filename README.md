@@ -29,7 +29,8 @@ index.html?preset=laserShoot&rate=8000&bits=16
 ```
 
 (`preset`: `pickupCoin`, `laserShoot`, `explosion`, `powerUp`, `hitHurt`, `jump`, `blipSelect`,
-`synth`, `tone`, `random` · `rate`: 44100, 22050, 11025, 8000 · `bits`: 8, 16.)
+`synth`, `tone`, `random` · `rate`: any 4000–96000 Hz, with 44100/22050/11025/8000 offered as
+chips · `bits`: 8, 16.)
 
 ## What you can do
 
@@ -43,6 +44,8 @@ index.html?preset=laserShoot&rate=8000&bits=16
 | **Export** | WAV (mono PCM), JSON (sfxr-compatible parameter object), compact shareable permalink, and a **ZIP pack** of every banked sound |
 | **Bank** | Save sounds to a persistent strip (localStorage, 24 slots), click to reload, `×` to delete |
 | **Batch** | Roll 8 variations of the current generator and keep the best one |
+| **A/B compare** | `A` plays the sound as it was before your last change |
+| **Remembers your setup** | Open/collapsed panels, Normalize and Master volume persist in localStorage |
 | **Undo / Redo** | `Ctrl`/`Cmd` + `Z`, and `Ctrl`/`Cmd` + `Shift` + `Z` to redo |
 
 ### Keyboard shortcuts
@@ -52,6 +55,7 @@ index.html?preset=laserShoot&rate=8000&bits=16
 | `Space` | Play / replay |
 | `G` | Generate a random sound |
 | `M` | Mutate the current sound |
+| `A` | Play the previous sound (A/B) |
 | `1`–`4` | Square / Saw / Sine / Noise |
 | `Ctrl`+`Z` | Undo |
 | `Ctrl`+`Shift`+`Z` | Redo |
@@ -66,10 +70,11 @@ Sliders also respond to a **double-click**, which restores that parameter's defa
   comfortable level in a game. Turn it off if you want sfxr's raw, quieter output.
 - **Save / Load .json** — the same parameter keys sfxr uses (`p_env_attack`, `p_base_freq`, …),
   so sound definitions can be moved between tools.
-- **Copy link** — the parameter set travels in the URL fragment as a **30-byte payload**
-  (~40 characters, starting `#2…`). Each knob is quantised to 1/255 of its range and the noise
-  seed is carried, so a link reproduces the sound sample-for-sample. Links created by older
-  versions (the long base64-JSON form) still open.
+- **Copy link** — the parameter set travels in the URL fragment as a **31-byte payload**
+  (~43 characters, starting `#3…`). Each knob is quantised to 1/255 of its range and the noise
+  seed is carried, so a link reproduces the sound sample-for-sample; the sample rate is a full
+  16-bit field, so 48 kHz survives too. Links made by older builds (`#2…` and the long
+  base64-JSON form) still open.
 - **Pack .zip** — every banked sound as a WAV in one archive. The ZIP writer is ~90 lines with no
   dependencies (store method, real CRC-32), and the archive has been verified against Windows'
   own `Expand-Archive`.
@@ -106,16 +111,17 @@ share links reproduce a sound bit-for-bit.
 
 ## Tests
 
-Open `tests.html` for the in-browser suite (39 checks: WAV headers, export helpers, determinism,
+Open `tests.html` for the in-browser suite (41 checks: WAV headers, export helpers, determinism,
 preset audibility, quantisation ranges, pitch accuracy, duration mapping, exact 8 kHz rate,
-parameter codec including legacy links, slider mapping, panel construction, mutation validity,
-DC blocking for long and short sounds, waveform levelling, the anti-click fade, ZIP structure and
-CRC-32, bank persistence, clipping detection, and a 120-sound fuzz pass).
+parameter codec (v3 payloads plus legacy links), non-preset sample rates, slider mapping, panel
+construction, mutation validity, DC blocking for long and short sounds, waveform levelling, the
+anti-click fade, ZIP structure and CRC-32, bank persistence, clipping detection, and a 120-sound
+fuzz pass).
 
 No Node needed — `test.cmd` runs two headless passes (the unit suite, then `index.html?selftest=1`
-which exercises the app wiring: chips, undo/redo, permalinks, the export-quality guard, the WAV
-header, label coverage, duplicate IDs, horizontal overflow, the bank and the ZIP writer) and exits
-non-zero if either fails. Manually:
+and its 14 app checks: chips, custom-rate legend, undo/redo, permalinks, the export-quality guard,
+the WAV header, preferences, label coverage, duplicate IDs, horizontal overflow, the bank and the
+ZIP writer) and exits non-zero if either fails. Manually:
 
 ```
 chrome --headless=new --disable-gpu --virtual-time-budget=40000 --dump-dom tests.html
@@ -156,8 +162,9 @@ index.html          page shell
 css/styles.css      retro console theme (responsive, keyboard-accessible)
 js/rng.js           seeded mulberry32 PRNG
 js/params.js        parameter definitions, slider mapping, display formatting
-js/codec.js         permalinks: v2 binary payload + legacy JSON decoder
+js/codec.js         permalinks: v3 binary payload, v2 + legacy decoders
 js/bank.js          localStorage sound bank (24 entries)
+js/prefs.js         persisted UI preferences (panels, normalize, volume)
 js/zip.js           store-only ZIP writer used by the pack export
 js/export.js        parameters -> WAV bytes in one call (export, pack, self-test)
 js/io.js            downloads, clipboard, filenames, JSON sanity check
@@ -166,11 +173,14 @@ js/synth.js         the synthesis engine + quantiser
 js/wav.js           RIFF/WAVE encoder (8-bit unsigned, 16-bit signed)
 js/presets.js       generator heuristics + mutate()
 js/audio.js         Web Audio playback
-js/ui.js            parameter panel builder + oscilloscope
-js/app.js           state, export, undo, shortcuts
+js/ui.js            parameter panel builder + oscilloscope + bank strip
+js/selftest.js      the ?selftest=1 app checks
+js/app.js           state, rendering, workflow, boot
 tests.html          browser test suite
 tests.js            the test suite itself
 test.cmd            headless test runner (Chrome/Edge, no Node needed)
+PARAMETERS.md       parameter reference: ranges, formulas, link format
+.github/workflows/tests.yml   CI: runs test.cmd on windows-latest
 ```
 
 ## Credits
