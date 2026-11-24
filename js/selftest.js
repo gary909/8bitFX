@@ -4,7 +4,7 @@
    the DOM so a headless browser (test.cmd) can read it.
 
    ctx: { doc, state, $, renderAll, ensureFullQuality, changeSetting, undo, redo,
-          selectSection, toggleSection } */
+          toggleSection } */
 (function (root, factory) {
   "use strict";
   var api = factory(root);
@@ -50,24 +50,22 @@
       }
     }
 
-    check("parameter panel built with 23 sliders and 2 switches", function () {
-      var ranges = doc.querySelectorAll('#param-groups input[type="range"]').length;
-      var toggles = doc.querySelectorAll('#param-groups input[type="checkbox"]').length;
-      assert(ranges === 23, "sliders: " + ranges);
-      assert(toggles === 2, "switches: " + toggles);
-    });
+    check("three parameter windows, each fully populated", function () {
+      var panels = doc.querySelectorAll("#section-panels .section-panel");
+      var ranges = doc.querySelectorAll("#section-panels input[type='range']").length;
+      var toggles = doc.querySelectorAll("#section-panels input[type='checkbox']").length;
+      var radios = doc.querySelectorAll("#section-panels input[type='radio']").length;
+      var waves = doc.querySelectorAll("#section-panels canvas").length;
+      var presets = doc.querySelectorAll("#section-panels select").length;
 
-    check("three section cards, checkboxes and scopes", function () {
-      var cards = doc.querySelectorAll("#sections .section-card");
-      var boxes = doc.querySelectorAll("#sections input[type='checkbox']");
-      var minis = doc.querySelectorAll("#sections canvas");
-      var all = doc.querySelectorAll("canvas");
-      assert(cards.length === 3, "cards: " + cards.length);
-      assert(boxes.length === 3, "checkboxes: " + boxes.length);
-      assert(minis.length === 3, "mini scopes: " + minis.length);
-      assert(all.length === 4, "canvases: " + all.length);
-      assert(state.sections.length === 3, "sections in state: " + state.sections.length);
-      return cards.length + " cards, " + all.length + " canvases";
+      assert(panels.length === 3, "panels: " + panels.length);
+      assert(ranges === 69, "sliders: " + ranges);
+      assert(toggles === 9, "switches + include boxes: " + toggles);
+      assert(radios === 12, "waveform radios: " + radios);
+      assert(waves === 3, "section scopes: " + waves);
+      assert(presets === 3, "preset selects: " + presets);
+      assert(doc.querySelectorAll("canvas").length === 4, "expected 4 canvases in total");
+      return panels.length + " panels, " + ranges + " sliders";
     });
 
     check("rate/depth chips follow the (shared) format", function () {
@@ -98,19 +96,19 @@
       assert(/^Sample rate$/.test($("rate-legend").textContent), "legend not restored");
     });
 
-    check("selecting a section changes what the panel edits", function () {
+    check("each panel is bound to its own section", function () {
       var original = state.sections[1].p_base_freq;
       state.sections[1].p_base_freq = 0.99;
+      ctx.renderAll(true, 8);
 
-      ctx.selectSection(1);
-      assert(state.active === 1, "active section not switched");
-      var shown = Number($("p-p_base_freq").value);
-      assert(shown > 900, "panel slider did not follow section 2 (" + shown + ")");
+      var one = Number($("s1-p-p_base_freq").value);
+      var two = Number($("s2-p-p_base_freq").value);
+      assert(two > 900, "panel 2 did not follow section 2 (" + two + ")");
+      assert(one < two, "panel 1 should still show section 1 (" + one + ")");
 
-      ctx.selectSection(0);
       state.sections[1].p_base_freq = original;
       ctx.renderAll(true, 8);
-      return "panel follows the selected section";
+      return "panels stay independent";
     });
 
     check("undo then redo restores the format", function () {
@@ -170,6 +168,39 @@
       ctx.toggleSection(1, false);
       assert(state.rendered.count === 1, "section 2 not disabled again");
       return "count 1 -> 2 -> 1";
+    });
+
+    check("panel checkboxes and per-panel scopes are live", function () {
+      var panel2 = doc.querySelectorAll("#section-panels .section-panel")[1];
+      var box = panel2.querySelector(".section-include input");
+
+      ctx.renderAll(true, 8);
+      assert(box.checked === false, "panel 2 box should follow the disabled state");
+
+      var ev = doc.createEvent("HTMLEvents");
+      ev.initEvent("change", true, false);
+
+      box.checked = true;
+      box.dispatchEvent(ev);
+      assert(state.enabled[1] === true, "ticking the box did not enable section 2");
+      assert(state.rendered.count === 2, "mix ignored the ticked box");
+
+      var canvases = doc.querySelectorAll("#section-panels canvas");
+      var drawn = 0, c, data, n;
+      for (var i = 0; i < canvases.length; i++) {
+        c = canvases[i];
+        data = c.getContext("2d").getImageData(0, 0, c.width, c.height).data;
+        for (n = 3; n < data.length; n += 4) {
+          if (data[n] !== 0) { drawn++; break; }
+        }
+      }
+      assert(canvases.length === 3, "expected three section scopes");
+      assert(drawn === 3, "only " + drawn + " of 3 section scopes drew anything");
+
+      box.checked = false;
+      box.dispatchEvent(ev);
+      assert(state.enabled[1] === false, "unticking the box did not disable section 2");
+      return "3 scopes drawn, checkbox wiring live";
     });
 
     check("disabling every section empties the mix", function () {

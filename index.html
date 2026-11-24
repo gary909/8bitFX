@@ -8,7 +8,7 @@
 <link rel="stylesheet" href="css/styles.css">
 </head>
 <body>
-<a class="skip-link" href="#param-panel">Skip to parameters</a>
+<a class="skip-link" href="#section-panels">Skip to the section controls</a>
 
 <header class="topbar">
   <h1 class="logo">8bit<span>FX</span></h1>
@@ -21,29 +21,58 @@
   </div>
 </header>
 
+<div class="masterbar" role="group" aria-label="Master transport">
+  <button type="button" id="btn-play" class="btn btn-primary">&#9654; Play</button>
+
+  <div class="scope master-scope">
+    <canvas id="waveform" width="900" height="120" role="img"
+            aria-label="Mixed master waveform" aria-describedby="scope-desc"></canvas>
+    <p class="scope-empty" id="scope-empty">No sections enabled &mdash; tick a box</p>
+    <p class="visually-hidden" id="scope-desc">Waveform of the mixed master output. Its length,
+      sample count, file size and clip count are shown beside it.</p>
+  </div>
+
+  <fieldset class="chipset">
+    <legend id="rate-legend">Sample rate</legend>
+    <div class="chips" id="rate-chips">
+      <input type="radio" name="rate" id="rate-44100" value="44100" checked><label for="rate-44100">44k</label>
+      <input type="radio" name="rate" id="rate-22050" value="22050"><label for="rate-22050">22k</label>
+      <input type="radio" name="rate" id="rate-11025" value="11025"><label for="rate-11025">11k</label>
+      <input type="radio" name="rate" id="rate-8000" value="8000"><label for="rate-8000">8k</label>
+    </div>
+  </fieldset>
+
+  <fieldset class="chipset">
+    <legend>Sample size</legend>
+    <div class="chips" id="bits-chips">
+      <input type="radio" name="bits" id="bits-8" value="8" checked><label for="bits-8">8 bit</label>
+      <input type="radio" name="bits" id="bits-16" value="16"><label for="bits-16">16 bit</label>
+    </div>
+  </fieldset>
+
+  <label class="switch" for="chk-normalize">
+    <input type="checkbox" id="chk-normalize" checked>
+    <span>Normalize</span>
+  </label>
+
+  <div class="master-stats">
+    <span class="ms"><span class="stat-label">Length</span> <span id="stat-duration" class="stat-value">&mdash;</span></span>
+    <span class="ms"><span class="stat-label">Samples</span> <span id="stat-samples" class="stat-value">&mdash;</span></span>
+    <span class="ms"><span class="stat-label">Size</span> <span id="stat-size" class="stat-value">&mdash;</span></span>
+    <span class="ms"><span class="stat-label">Clipped</span> <span id="stat-clipped" class="stat-value">&mdash;</span></span>
+  </div>
+
+  <p class="hint" id="clip-hint" hidden>Clipping &mdash; lower a section's Gain.</p>
+  <p class="note" id="cap-hint" hidden>Length capped at 4 s.</p>
+</div>
+
 <main class="layout">
 
-  <!-- ===== generators ===== -->
-  <aside class="panel generators" aria-labelledby="gen-heading">
-    <h2 id="gen-heading">Generators</h2>
-    <div class="gen-grid" id="gen-grid">
-      <button type="button" class="gen" data-preset="pickupCoin">Pickup<b>/Coin</b></button>
-      <button type="button" class="gen" data-preset="laserShoot">Laser<b>/Shoot</b></button>
-      <button type="button" class="gen" data-preset="explosion">Explosion</button>
-      <button type="button" class="gen" data-preset="powerUp">Power-Up</button>
-      <button type="button" class="gen" data-preset="hitHurt">Hit<b>/Hurt</b></button>
-      <button type="button" class="gen" data-preset="jump">Jump</button>
-      <button type="button" class="gen" data-preset="blipSelect">Blip<b>/Select</b></button>
-      <button type="button" class="gen" data-preset="synth">Synth</button>
-      <button type="button" class="gen gen-span" data-preset="tone">Tone</button>
-      <button type="button" class="gen gen-wide" data-preset="random">Random</button>
-    </div>
-
-    <h2>Actions</h2>
+  <!-- ===== rail ===== -->
+  <aside class="panel rail" aria-labelledby="rail-heading">
+    <h2 id="rail-heading">Master</h2>
     <div class="actions">
-      <button type="button" id="btn-play" class="btn btn-primary btn-wide">&#9654; Play</button>
-      <button type="button" id="btn-generate" class="btn">&#10227; Generate</button>
-      <button type="button" id="btn-mutate" class="btn">&#10033; Mutate</button>
+      <button type="button" id="btn-roll-all" class="btn btn-wide">&#10227; Roll all 3</button>
       <button type="button" id="btn-undo" class="btn" disabled>&#8630; Undo</button>
       <button type="button" id="btn-redo" class="btn" disabled>&#8631; Redo</button>
     </div>
@@ -55,63 +84,14 @@
       <button type="button" id="btn-bank-clear" class="btn">Clear</button>
     </div>
 
-    <details class="group" id="batch-group">
-      <summary>Batch variations</summary>
-      <div class="group-body">
-        <div class="batch-grid" id="batch-grid"></div>
-        <button type="button" id="btn-batch" class="btn">&#10227; Roll 8</button>
-      </div>
-    </details>
-
-    <h2>Sound</h2>
-    <div class="stats">
-      <div><span class="stat-label">Duration</span><span id="stat-duration" class="stat-value">&mdash;</span></div>
-      <div><span class="stat-label">Samples</span><span id="stat-samples" class="stat-value">&mdash;</span></div>
-      <div><span class="stat-label">File size</span><span id="stat-size" class="stat-value">&mdash;</span></div>
-      <div><span class="stat-label">Clipped</span><span id="stat-clipped" class="stat-value">&mdash;</span></div>
+    <h2>Batch</h2>
+    <div class="target-chips" id="batch-target" role="group" aria-label="Batch target section">
+      <button type="button" class="target-chip is-on" data-target="0">1</button>
+      <button type="button" class="target-chip" data-target="1">2</button>
+      <button type="button" class="target-chip" data-target="2">3</button>
     </div>
-    <p class="hint" id="clip-hint" hidden>Clipping &mdash; lower the Gain slider.</p>
-    <p class="note" id="cap-hint" hidden>Length capped at 4 s.</p>
-  </aside>
-
-  <!-- ===== stage ===== -->
-  <section class="panel stage" aria-labelledby="stage-heading">
-    <h2 id="stage-heading" class="visually-hidden">Sound preview</h2>
-
-    <div class="sections" id="sections" role="group" aria-label="Synth sections"></div>
-
-    <div class="scope">
-      <canvas id="waveform" width="900" height="260" role="img"
-              aria-label="Waveform preview" aria-describedby="scope-desc"></canvas>
-      <p class="scope-empty" id="scope-empty">No sound yet &mdash; hit Generate</p>
-      <p class="visually-hidden" id="scope-desc">Waveform of the current sound. Its length,
-        sample count, file size and clip count are listed under Sound.</p>
-    </div>
-
-    <div class="stage-controls">
-      <fieldset class="chipset">
-        <legend id="rate-legend">Sample rate</legend>
-        <div class="chips" id="rate-chips">
-          <input type="radio" name="rate" id="rate-44100" value="44100" checked><label for="rate-44100">44k</label>
-          <input type="radio" name="rate" id="rate-22050" value="22050"><label for="rate-22050">22k</label>
-          <input type="radio" name="rate" id="rate-11025" value="11025"><label for="rate-11025">11k</label>
-          <input type="radio" name="rate" id="rate-8000" value="8000"><label for="rate-8000">8k</label>
-        </div>
-      </fieldset>
-
-      <fieldset class="chipset">
-        <legend>Sample size</legend>
-        <div class="chips" id="bits-chips">
-          <input type="radio" name="bits" id="bits-8" value="8" checked><label for="bits-8">8 bit</label>
-          <input type="radio" name="bits" id="bits-16" value="16"><label for="bits-16">16 bit</label>
-        </div>
-      </fieldset>
-
-      <label class="switch" for="chk-normalize">
-        <input type="checkbox" id="chk-normalize" checked>
-        <span>Normalize on export</span>
-      </label>
-    </div>
+    <div class="batch-grid" id="batch-grid"></div>
+    <button type="button" id="btn-batch" class="btn btn-wide">&#10227; Roll 8</button>
 
     <p class="hints">
       <kbd>Space</kbd> play
@@ -119,16 +99,12 @@
       <kbd>M</kbd> mutate
       <kbd>A</kbd> previous
       <kbd>1</kbd>&ndash;<kbd>4</kbd> waveform
-      <kbd>Ctrl</kbd>+<kbd>Z</kbd> undo
       <kbd>?</kbd> help
     </p>
-  </section>
+  </aside>
 
-  <!-- ===== parameters ===== -->
-  <section class="panel params" id="param-panel" aria-labelledby="param-heading">
-    <h2 id="param-heading">Parameters</h2>
-    <div id="param-groups"><!-- built by ui.js --></div>
-  </section>
+  <!-- ===== the three synth windows ===== -->
+  <div class="panels" id="section-panels"><!-- built by ui.js --></div>
 </main>
 
 <footer class="exportbar">

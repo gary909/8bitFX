@@ -408,13 +408,19 @@
       return r8.frames + " frames @ 8 kHz = " + r8.duration.toFixed(3) + " s";
     });
 
-    check("parameter panel builds and syncs every control", function () {
+    check("a section window builds and syncs every control", function () {
       var doc = root.document;
       var host = doc.createElement("div");
       var last = null;
-      var built = UI.buildParams(host, {
-        onInput: function (key, value) { last = { key: key, value: value }; },
-        onCommit: function () {}
+
+      var view = UI.buildSectionPanel(host, 2, {
+        input: function (index, key, value) { last = { index: index, key: key, value: value }; },
+        commit: function () {},
+        rename: function () {},
+        preset: function () {},
+        mutate: function () {},
+        play: function () {},
+        toggle: function () {}
       });
 
       var inputs = host.getElementsByTagName("input");
@@ -428,28 +434,39 @@
       }
       assert(ranges === 23, "expected 23 sliders, got " + ranges);
       assert(radios === 4, "expected 4 waveform radios, got " + radios);
-      assert(toggles === 2, "expected 2 switches, got " + toggles);
+      assert(toggles === 3, "expected 2 switches + 1 include box, got " + toggles);
+
+      var groups = host.getElementsByTagName("details");
+      assert(groups.length === 0, "parameter groups must never collapse");
+      assert(host.querySelectorAll(".group-block").length === P.GROUPS.length,
+        "expected " + P.GROUPS.length + " group blocks");
 
       var p = G.make("tone", 1);
-      built.sync(p);
-      assert(byId["wave-2"].checked, "sine radio not selected by sync()");
-      assert(byId["p-p_base_freq"].value !== "", "slider was not positioned");
+      view.sync({ params: p, name: "Tone B", enabled: true, focus: true });
+
+      assert(byId["s3-wave-2"].checked, "sine radio not selected by sync()");
+      assert(byId["s3-p-p_base_freq"].value !== "", "slider was not positioned");
+      assert(host.querySelector(".section-name").value === "Tone B", "name not synced");
+      assert(host.querySelector(".section-include input").checked === true,
+        "include checkbox not synced");
+      assert(host.querySelector(".section-panel").className.indexOf("is-focus") !== -1,
+        "focused panel is not marked");
 
       var outputs = host.getElementsByTagName("output");
       assert(outputs.length === 25, "expected 25 readouts, got " + outputs.length);
       assert(outputs[0].textContent.length > 0, "readout is empty");
 
-      var slider = byId["p-p_base_freq"];
+      var slider = byId["s3-p-p_base_freq"];
       slider.value = "1000";
       var ev = doc.createEvent("HTMLEvents");
       ev.initEvent("input", true, false);
       slider.dispatchEvent(ev);
-      assert(last && last.key === "p_base_freq", "input event missed the handler");
+      assert(last && last.key === "p_base_freq" && last.index === 2,
+        "input event did not report section 2");
       approx(last.value, 1, 1e-6, "slider max should map to 1");
 
-      var groups = host.getElementsByTagName("details");
-      assert(groups.length === P.GROUPS.length, "expected " + P.GROUPS.length + " groups");
-      return ranges + " sliders, " + radios + " radios, " + groups.length + " groups";
+      assert(view.canvas && view.canvas.className === "section-wave", "canvas missing");
+      return ranges + " sliders, " + radios + " radios, " + P.GROUPS.length + " groups";
     });
 
     check("render throughput (informational)", function () {

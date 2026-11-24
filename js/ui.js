@@ -9,7 +9,11 @@
   "use strict";
 
   var WAVE_LABELS = ["Square", "Saw", "Sine", "Noise"];
-  var COLLAPSED_BY_DEFAULT = { Flanger: true, Retrigger: true };
+  var PRESET_LABELS = {
+    pickupCoin: "Pickup / Coin", laserShoot: "Laser / Shoot", explosion: "Explosion",
+    powerUp: "Power-Up", hitHurt: "Hit / Hurt", jump: "Jump", blipSelect: "Blip / Select",
+    synth: "Synth", tone: "Tone", random: "Random"
+  };
 
   function P() { return root.SFX.params; }
 
@@ -35,17 +39,19 @@
     return Math.pow(t, def.curve);
   }
 
-  function buildWaves(host, handlers) {
+  function buildWaves(host, handlers, prefix) {
     var wrap = document.createElement("div");
     wrap.className = "waves";
     var inputs = [];
     var w, id, input, label;
 
+    prefix = prefix || "";
+
     for (w = 0; w < 4; w++) {
-      id = "wave-" + w;
+      id = prefix + "wave-" + w;
       input = document.createElement("input");
       input.type = "radio";
-      input.name = "wave_type";
+      input.name = prefix + "wave_type";
       input.id = id;
       input.value = String(w);
       label = document.createElement("label");
@@ -65,17 +71,17 @@
     return { type: "wave", inputs: inputs };
   }
 
-  function buildRow(host, def, handlers) {
+  function buildRow(host, def, handlers, prefix) {
     var row = document.createElement("div");
     row.className = "row";
 
-    var id = "p-" + def.key;
+    var id = (prefix || "") + "p-" + def.key;
     var label = document.createElement("label");
     label.setAttribute("for", id);
     label.textContent = def.label;
 
     var out = document.createElement("output");
-    out.id = "out-" + def.key;
+    out.id = (prefix || "") + "out-" + def.key;
     out.setAttribute("for", id);
     out.textContent = "\u2014";
 
@@ -105,17 +111,17 @@
     return { type: "range", def: def, input: input, out: out };
   }
 
-  function buildSwitch(host, def, handlers) {
+  function buildSwitch(host, def, handlers, prefix) {
     var row = document.createElement("div");
     row.className = "row row-switch";
 
-    var id = "sw-" + def.key;
+    var id = (prefix || "") + "sw-" + def.key;
     var label = document.createElement("label");
     label.setAttribute("for", id);
     label.textContent = def.label;
 
     var out = document.createElement("output");
-    out.id = "out-" + def.key;
+    out.id = (prefix || "") + "out-" + def.key;
     out.setAttribute("for", id);
     out.textContent = "\u2014";
 
@@ -136,62 +142,57 @@
     return { type: "switch", def: def, input: input, out: out };
   }
 
-  /* Build every control from DEFS.
-     handlers = { onInput(key, value), onCommit(), onGroupToggle(name, open) }
-     openState = optional map of group name -> open (persisted preferences) */
-  function buildParams(container, handlers, openState) {
+  /* Every control for one section, in always-open group blocks.
+     handlers = { input(index, key, value), commit() } */
+  function buildControls(host, index, handlers, prefix) {
     var api = P();
     var controls = {};
     var bodies = {};
-    var i, d, name, g, summary, body;
+    var i, d, name, block, heading, body;
 
     for (i = 0; i < api.GROUPS.length; i++) {
       name = api.GROUPS[i];
-      g = document.createElement("details");
-      g.className = "group";
-      if (openState && openState.hasOwnProperty(name)) {
-        if (openState[name]) { g.setAttribute("open", "open"); }
-      } else if (!COLLAPSED_BY_DEFAULT[name]) {
-        g.setAttribute("open", "open");
-      }
-      summary = document.createElement("summary");
-      summary.textContent = name;
-      g.appendChild(summary);
+      block = document.createElement("section");
+      block.className = "group-block";
+      heading = document.createElement("h3");
+      heading.textContent = name;
+      block.appendChild(heading);
       body = document.createElement("div");
       body.className = "group-body";
-      g.appendChild(body);
+      block.appendChild(body);
       bodies[name] = body;
-      container.appendChild(g);
-
-      (function (groupName, node) {
-        node.addEventListener("toggle", function () {
-          if (handlers.onGroupToggle) { handlers.onGroupToggle(groupName, node.open); }
-        });
-      }(name, g));
+      host.appendChild(block);
     }
+
+    var local = {
+      onInput: function (key, value) { handlers.input(index, key, value); },
+      onCommit: function () { handlers.commit(); }
+    };
 
     for (i = 0; i < api.DEFS.length; i++) {
       d = api.DEFS[i];
       if (!bodies[d.group]) { continue; }
       if (d.type === "wave") {
-        controls[d.key] = buildWaves(bodies[d.group], handlers);
+        controls[d.key] = buildWaves(bodies[d.group], local, prefix);
       } else if (d.type === "switch") {
-        controls[d.key] = buildSwitch(bodies[d.group], d, handlers);
+        controls[d.key] = buildSwitch(bodies[d.group], d, local, prefix);
       } else {
-        controls[d.key] = buildRow(bodies[d.group], d, handlers);
+        controls[d.key] = buildRow(bodies[d.group], d, local, prefix);
       }
     }
 
     function sync(p) {
-      var key, c, slider, text;
+      var key, c, slider, text, on;
       var knobs = api.toKnobsCoerced(p);
+
       for (key in controls) {
         if (!controls.hasOwnProperty(key)) { continue; }
         c = controls[key];
+
         if (c.type === "wave") {
           if (p.wave_type >= 0 && p.wave_type < 4) { c.inputs[p.wave_type].checked = true; }
         } else if (c.type === "switch") {
-          var on = !!p[key];
+          on = !!p[key];
           if (c.input.checked !== on) { c.input.checked = on; }
           text = api.format(key, p, knobs);
           if (c.out.textContent !== text) { c.out.textContent = text; }
@@ -209,6 +210,115 @@
     }
 
     return { controls: controls, sync: sync };
+  }
+
+  /* A complete synth window: header, its own waveform, then every parameter.
+     handlers = { input, commit, rename, preset, mutate, play, toggle } */
+  function buildSectionPanel(container, index, handlers) {
+    var presets = root.SFX.presets;
+    var panel = document.createElement("section");
+    panel.className = "section-panel";
+    panel.setAttribute("data-section", String(index));
+
+    var head = document.createElement("header");
+    head.className = "section-head";
+
+    var include = document.createElement("label");
+    include.className = "section-include";
+    include.title = "Include this section in the master mix";
+
+    var box = document.createElement("input");
+    box.type = "checkbox";
+    box.setAttribute("aria-label", "Include section " + (index + 1) + " in the mix");
+    box.addEventListener("change", function () { handlers.toggle(index, box.checked); });
+
+    var badge = document.createElement("span");
+    badge.className = "section-badge";
+    badge.textContent = String(index + 1);
+
+    include.appendChild(box);
+    include.appendChild(badge);
+
+    var nameInput = document.createElement("input");
+    nameInput.type = "text";
+    nameInput.className = "section-name";
+    nameInput.maxLength = 24;
+    nameInput.setAttribute("aria-label", "Section " + (index + 1) + " name");
+    nameInput.addEventListener("change", function () { handlers.rename(index, nameInput.value); });
+
+    var preset = document.createElement("select");
+    preset.className = "section-preset";
+    preset.setAttribute("aria-label", "Load a preset into section " + (index + 1));
+
+    var blank = document.createElement("option");
+    blank.value = "";
+    blank.textContent = "Preset\u2026";
+    preset.appendChild(blank);
+
+    var g, key, opt;
+    for (g = 0; g < presets.names.length; g++) {
+      key = presets.names[g];
+      opt = document.createElement("option");
+      opt.value = key;
+      opt.textContent = PRESET_LABELS[key] || key;
+      preset.appendChild(opt);
+    }
+    preset.addEventListener("change", function () {
+      if (!preset.value) { return; }
+      handlers.preset(index, preset.value);
+      preset.value = "";
+    });
+
+    var mutate = document.createElement("button");
+    mutate.type = "button";
+    mutate.className = "section-icon";
+    mutate.textContent = "\u2733";
+    mutate.title = "Mutate section " + (index + 1);
+    mutate.setAttribute("aria-label", "Mutate section " + (index + 1));
+    mutate.addEventListener("click", function () { handlers.mutate(index); });
+
+    var play = document.createElement("button");
+    play.type = "button";
+    play.className = "section-icon";
+    play.textContent = "\u25B6";
+    play.title = "Play section " + (index + 1);
+    play.setAttribute("aria-label", "Play section " + (index + 1));
+    play.addEventListener("click", function () { handlers.play(index); });
+
+    head.appendChild(include);
+    head.appendChild(nameInput);
+    head.appendChild(preset);
+    head.appendChild(mutate);
+    head.appendChild(play);
+
+    var canvas = document.createElement("canvas");
+    canvas.className = "section-wave";
+    canvas.width = 420;
+    canvas.height = 90;
+    canvas.setAttribute("role", "img");
+    canvas.setAttribute("aria-label", "Section " + (index + 1) + " waveform");
+
+    var body = document.createElement("div");
+    body.className = "section-body";
+
+    panel.appendChild(head);
+    panel.appendChild(canvas);
+    panel.appendChild(body);
+    container.appendChild(panel);
+
+    var built = buildControls(body, index, handlers, "s" + (index + 1) + "-");
+
+    return {
+      canvas: canvas,
+      sync: function (view) {
+        built.sync(view.params);
+        if (nameInput.value !== view.name) { nameInput.value = view.name; }
+        if (box.checked !== !!view.enabled) { box.checked = !!view.enabled; }
+        panel.className = "section-panel" +
+          (view.enabled ? "" : " is-muted") +
+          (view.focus ? " is-focus" : "");
+      }
+    };
   }
 
   /* Bank strip: name + delete per entry. handlers = { load(entry), remove(entry) } */
@@ -251,88 +361,6 @@
     }
   }
 
-  /* Three section cards: include checkbox, mini scope, name, play button.
-     handlers = { select(index), toggle(index, on), play(index) }
-     returns { canvases, draw(index, samples, peak), sync({ names, enabled, active }) } */
-  function renderSections(container, handlers) {
-    var cards = [], canvases = [], i;
-
-    while (container.firstChild) { container.removeChild(container.firstChild); }
-
-    function makeCard(index) {
-      var card = document.createElement("div");
-      card.className = "section-card";
-
-      var include = document.createElement("label");
-      include.className = "section-include";
-      include.title = "Include in the master mix";
-
-      var box = document.createElement("input");
-      box.type = "checkbox";
-      box.setAttribute("aria-label", "Include section " + (index + 1) + " in the mix");
-      box.addEventListener("change", function () { handlers.toggle(index, box.checked); });
-
-      var number = document.createElement("span");
-      number.textContent = String(index + 1);
-
-      include.appendChild(box);
-      include.appendChild(number);
-
-      var canvas = document.createElement("canvas");
-      canvas.className = "section-scope";
-      canvas.width = 220;
-      canvas.height = 56;
-      canvas.setAttribute("role", "img");
-      canvas.setAttribute("aria-label", "Section " + (index + 1) + " waveform");
-
-      var name = document.createElement("span");
-      name.className = "section-name";
-
-      var pick = document.createElement("button");
-      pick.type = "button";
-      pick.className = "section-pick";
-      pick.setAttribute("aria-label", "Edit section " + (index + 1));
-      pick.appendChild(canvas);
-      pick.appendChild(name);
-      pick.addEventListener("click", function () { handlers.select(index); });
-
-      var play = document.createElement("button");
-      play.type = "button";
-      play.className = "section-play";
-      play.textContent = "\u25B6";
-      play.setAttribute("aria-label", "Play section " + (index + 1));
-      play.addEventListener("click", function () { handlers.play(index); });
-
-      card.appendChild(include);
-      card.appendChild(pick);
-      card.appendChild(play);
-      container.appendChild(card);
-
-      cards.push(card);
-      canvases.push(canvas);
-    }
-
-    for (i = 0; i < 3; i++) { makeCard(i); }
-
-    return {
-      canvases: canvases,
-      draw: function (index, samples, peak) {
-        if (canvases[index]) { drawWaveform(canvases[index], samples, peak); }
-      },
-      sync: function (state) {
-        for (var n = 0; n < cards.length; n++) {
-          var box = cards[n].getElementsByTagName("input")[0];
-          var label = cards[n].getElementsByClassName("section-name")[0];
-
-          if (box) { box.checked = !!state.enabled[n]; }
-          if (label) { label.textContent = state.names[n] || ("Section " + (n + 1)); }
-          cards[n].className = "section-card" +
-            (n === state.active ? " is-active" : "") +
-            (state.enabled[n] ? "" : " is-muted");
-        }
-      }
-    };
-  }
 
   /* Oscilloscope: min/max envelope per pixel column, snapped to whole pixels
      so it reads like a chunky 8-bit screen. */
@@ -398,10 +426,9 @@
   }
 
   return {
-    buildParams: buildParams,
+    buildSectionPanel: buildSectionPanel,
     drawWaveform: drawWaveform,
     renderBank: renderBank,
-    renderSections: renderSections,
     toSlider: toSlider,
     fromSlider: fromSlider,
     WAVE_LABELS: WAVE_LABELS

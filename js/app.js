@@ -8,7 +8,8 @@
   var state = {
     sections: [],                 /* three independent parameter sets */
     enabled: [true, false, false],/* included in the master mix */
-    active: 0,                    /* which section the parameter panel edits */
+    focus: 0,                     /* panel targeted by the keyboard shortcuts */
+    batchTarget: 0,
     names: ["Section 1", "Section 2", "Section 3"],
     layers: [null, null, null],   /* per-section render cache */
     layerKeys: ["", "", ""],
@@ -33,14 +34,13 @@
   var TOAST_MS = 1800;
   var CLIP_RATIO = 0.005;   /* warn about clipping above this fraction of frames */
 
-  var panel = null;
-  var strip = null;
+  var panels = [];
   var els = {};
 
   function $(id) { return doc.getElementById(id); }
 
   /* ---------- patch helpers ---------- */
-  function activeParams() { return state.sections[state.active]; }
+  function activeParams() { return state.sections[state.focus] || state.sections[0]; }
 
   function eachSection(fn) {
     for (var i = 0; i < SECTION_COUNT; i++) { fn(state.sections[i], i); }
@@ -51,8 +51,7 @@
   function sectionSignature(p) { return JSON.stringify(SFX.params.serialize(p)); }
 
   function patchSignature() {
-    return state.sections.map(sectionSignature).join("|") + "#" +
-      state.enabled.join(",") + "#" + state.active;
+    return state.sections.map(sectionSignature).join("|") + "#" + state.enabled.join(",");
   }
 
   function toast(message) {
@@ -66,7 +65,7 @@
   }
 
   function fileName(ext) {
-    return SFX.io.fileName(state.names[state.active], activeParams(), ext);
+    return SFX.io.fileName(state.names[state.focus], state.sections[0], ext);
   }
 
   function download(blob, name) { SFX.io.download(blob, name); }
@@ -76,7 +75,7 @@
   /* ---------- undo / redo ---------- */
   function snapshot() {
     return JSON.stringify({
-      active: state.active,
+      focus: state.focus,
       names: state.names,
       enabled: state.enabled,
       sections: state.sections.map(SFX.params.serialize)
@@ -97,7 +96,7 @@
     state.enabled = [];
     for (i = 0; i < SECTION_COUNT; i++) { state.enabled.push(!!enabled[i]); }
     if (!keepNames) { state.names = ["Section 1", "Section 2", "Section 3"]; }
-    state.active = 0;
+    state.focus = 0;
     state.layers = [null, null, null];
     state.layerKeys = ["", "", ""];
   }
@@ -132,8 +131,8 @@
       state.sections = entry.sections.map(SFX.params.coerce);
       state.enabled = (entry.enabled || [true, false, false]).slice(0, SECTION_COUNT);
       if (entry.names) { state.names = entry.names.slice(); }
-      if (typeof entry.active === "number") {
-        state.active = Math.max(0, Math.min(SECTION_COUNT - 1, entry.active));
+      if (typeof entry.focus === "number") {
+        state.focus = Math.max(0, Math.min(SECTION_COUNT - 1, entry.focus));
       }
     } else {
       acceptPatch({ sections: [entry.params || entry], enabled: [true, false, false] }, true);
@@ -159,29 +158,64 @@
   }
 
   /* ---------- generation ---------- */
-  function applyParams(next, name) {
+  function applyTo(index, next, name) {
     pushUndo(snapshot());
-    state.sections[state.active] = SFX.params.coerce(next);
-    if (name) { state.names[state.active] = name; }
+    state.sections[index] = SFX.params.coerce(next);
+    if (name) { state.names[index] = name; }
     state.editSnapshot = null;
     renderAll();
     writeHash();
   }
 
-  function generate(name) {
-    var preset = name || "random";
-    applyParams(SFX.presets.make(preset, SFX.rng.newSeed()), preset);
-    play();
+  function applyPreset(index, name) {
+    applyTo(index, SFX.presets.make(name, SFX.rng.newSeed()), name);
+    playSection(index);
   }
 
-  function mutate() {
+  function generate(name) {
+    applyPreset(state.focus, name || "random");
+  }
+
+  function mutateSection(index) {
     var before = snapshot();
-    state.sections[state.active] = SFX.presets.mutate(activeParams(), SFX.rng.newSeed());
+    state.sections[index] = SFX.presets.mutate(state.sections[index], SFX.rng.newSeed());
     pushUndo(before);
     state.editSnapshot = null;
     renderAll();
     writeHash();
+    playSection(index);
+  }
+
+  function mutate() { mutateSection(state.focus); }
+
+  function renameSection(index, value) {
+    var clean = String(value || "").replace(/\s+/g, " ").trim().slice(0, 24);
+    if (!clean || clean === state.names[index]) {
+      syncPanels();
+      return;
+    }
+    pushUndo(snapshot());
+    state.names[index] = clean;
+    syncPanels();
+    writeHash();
+  }
+
+  /* fill all three sections with different random presets and mix them */
+  function rollAll() {
+    pushUndo(snapshot());
+
+    for (var i = 0; i < SECTION_COUNT; i++) {
+      var pick = SFX.presets.names[Math.floor(Math.random() * SFX.presets.names.length)];
+      state.sections[i] = SFX.presets.make(pick, SFX.rng.newSeed());
+      state.names[i] = pick;
+      state.enabled[i] = true;
+    }
+
+    state.editSnapshot = null;
+    renderAll(true, 8);
+    writeHash();
     play();
+    toast("Rolled three sections");
   }
 
   /* ---------- playback ---------- */
@@ -224,12 +258,6 @@
   }
 
   /* ---------- preferences ---------- */
-  function saveGroupPref(name, open) {
-    var groups = SFX.prefs.load().groups || {};
-    if (groups[name] === open) { return; }
-    groups[name] = open;
-    SFX.prefs.save({ groups: groups });
-  }
 
   /* ---------- rendering ---------- */
   function cancelFrame() {
@@ -252,8 +280,7 @@
 
     var signature = paramsSignature() + "@" + os;
     if (!force && state.rendered && signature === state.signature) {
-      if (panel) { panel.sync(activeParams()); }
-      syncSections();
+      syncPanels();
       return;
     }
 
@@ -278,8 +305,7 @@
         : null;
       state.signature = signature;
 
-      if (panel) { panel.sync(activeParams()); }
-      syncSections();
+      syncPanels();
       draw();
       updateStats();
       syncChips();
@@ -336,10 +362,9 @@
   }
 
   function drawSectionScopes() {
-    if (!strip) { return; }
-    for (var i = 0; i < SECTION_COUNT; i++) {
+    for (var i = 0; i < panels.length; i++) {
       var layer = state.layers[i];
-      strip.draw(i, layer ? layer.float : null, layer ? layer.peak : 1);
+      SFX.ui.drawWaveform(panels[i].canvas, layer ? layer.float : null, layer ? layer.peak : 1);
     }
   }
 
@@ -397,9 +422,10 @@
   }
 
   /* ---------- control handlers ---------- */
-  function onInput(key, value) {
+  function onInput(index, key, value) {
     if (!state.editSnapshot) { state.editSnapshot = snapshot(); }
-    activeParams()[key] = value;
+    state.sections[index][key] = value;
+    state.focus = index;
     scheduleRender();
   }
 
@@ -424,7 +450,7 @@
     return {
       format: "8bitfx-layers",
       version: 2,
-      name: state.names[state.active],
+      name: state.names[state.focus],
       enabled: state.enabled,
       sections: state.sections.map(SFX.params.serialize)
     };
@@ -468,7 +494,7 @@
         toast("That JSON doesn't look like a sound");
         return;
       }
-      applyParams(SFX.params.coerce(data), "loaded");
+      applyTo(state.focus, SFX.params.coerce(data), "loaded");
       play();
       toast("Section loaded");
     };
@@ -510,7 +536,7 @@
   }
 
   function saveToBank() {
-    var name = nextBankName(state.names[state.active]);
+    var name = nextBankName(state.names[state.focus]);
     var entry = SFX.bank.add(patch(), name);
     if (!entry) { toast("Bank storage unavailable"); return; }
     refreshBank();
@@ -588,8 +614,8 @@
         btn.textContent = String(index + 1);
         btn.setAttribute("aria-label", "Use variation " + (index + 1));
         btn.addEventListener("click", function () {
-          applyParams(state.batch[index], state.names[state.active]);
-          play();
+          applyTo(state.batchTarget, state.batch[index], state.names[state.batchTarget]);
+          playSection(state.batchTarget);
         });
         grid.appendChild(btn);
       }(i));
@@ -597,8 +623,8 @@
   }
 
   function rollBatch() {
-    var generator = SFX.presets.GENERATORS[state.names[state.active]]
-      ? state.names[state.active]
+    var generator = SFX.presets.GENERATORS[state.names[state.batchTarget]]
+      ? state.names[state.batchTarget]
       : "random";
     var seed = SFX.rng.newSeed();
     state.batch = [];
@@ -617,12 +643,6 @@
   }
 
   /* ---------- sections ---------- */
-  function selectSection(index) {
-    if (index === state.active || !state.sections[index]) { return; }
-    state.active = index;
-    renderAll(true, 8);
-  }
-
   function toggleSection(index, on) {
     if (state.enabled[index] === !!on) { return; }
     pushUndo(snapshot());
@@ -632,9 +652,42 @@
     if (!state.rendered.frames) { toast("No sections enabled"); }
   }
 
-  function syncSections() {
-    if (!strip) { return; }
-    strip.sync({ names: state.names, enabled: state.enabled, active: state.active });
+  function syncPanels() {
+    for (var i = 0; i < panels.length; i++) {
+      panels[i].sync({
+        params: state.sections[i],
+        name: state.names[i],
+        enabled: state.enabled[i],
+        focus: i === state.focus
+      });
+    }
+  }
+
+  /* whatever you touch becomes the panel that G / M / 1-4 act on */
+  function trackFocus(event) {
+    var node = event.target;
+
+    while (node && node !== doc.body) {
+      if (node.getAttribute && node.getAttribute("data-section") !== null) {
+        var index = Number(node.getAttribute("data-section"));
+        if (index >= 0 && index < SECTION_COUNT && index !== state.focus) {
+          state.focus = index;
+          syncPanels();
+        }
+        return;
+      }
+      node = node.parentNode;
+    }
+  }
+
+  function setBatchTarget(index) {
+    state.batchTarget = Math.max(0, Math.min(SECTION_COUNT - 1, index));
+
+    var chips = doc.querySelectorAll("#batch-target .target-chip");
+    for (var i = 0; i < chips.length; i++) {
+      var on = Number(chips[i].getAttribute("data-target")) === state.batchTarget;
+      chips[i].className = "target-chip" + (on ? " is-on" : "");
+    }
   }
 
   /* ---------- bindings ---------- */
@@ -668,8 +721,7 @@
     var i, list, el;
 
     $("btn-play").addEventListener("click", play);
-    $("btn-generate").addEventListener("click", function () { generate("random"); });
-    $("btn-mutate").addEventListener("click", mutate);
+    if ($("btn-roll-all")) { $("btn-roll-all").addEventListener("click", rollAll); }
     els.undo.addEventListener("click", undo);
     if (els.redo) { els.redo.addEventListener("click", redo); }
 
@@ -689,21 +741,24 @@
     var batch = $("btn-batch");
     if (batch) { batch.addEventListener("click", rollBatch); }
 
+    var targets = doc.querySelectorAll("#batch-target .target-chip");
+    for (i = 0; i < targets.length; i++) {
+      el = targets[i];
+      (function (chip) {
+        chip.addEventListener("click", function () {
+          setBatchTarget(Number(chip.getAttribute("data-target")));
+        });
+      }(el));
+    }
+
+    doc.addEventListener("focusin", trackFocus);
+    doc.addEventListener("pointerdown", trackFocus);
+
     $("file-input").addEventListener("change", function () {
       var file = this.files && this.files[0];
       if (file) { importJson(file); }
       this.value = "";
     });
-
-    list = doc.querySelectorAll("[data-preset]");
-    for (i = 0; i < list.length; i++) {
-      el = list[i];
-      (function (btn) {
-        btn.addEventListener("click", function () {
-          generate(btn.getAttribute("data-preset"));
-        });
-      }(el));
-    }
 
     list = doc.querySelectorAll("#rate-chips input");
     for (i = 0; i < list.length; i++) {
@@ -789,7 +844,6 @@
       changeSetting: changeSetting,
       undo: undo,
       redo: redo,
-      selectSection: selectSection,
       toggleSection: toggleSection
     });
   }
@@ -837,7 +891,7 @@
       }
       state.enabled = [true, false, false];
       state.names = [preset, "Section 2", "Section 3"];
-      state.active = 0;
+      state.focus = 0;
     }
 
     /* sample-rate / bit-depth overrides apply to every section */
@@ -854,22 +908,25 @@
       eachSection(function (section) { section.sample_size = depth; });
     }
 
-    panel = SFX.ui.buildParams($("param-groups"), {
-      onInput: onInput,
-      onCommit: onCommit,
-      onGroupToggle: saveGroupPref
-    }, SFX.prefs.load().groups);
-
-    strip = SFX.ui.renderSections($("sections"), {
-      select: selectSection,
-      toggle: toggleSection,
-      play: playSection
-    });
+    var container = $("section-panels");
+    panels = [];
+    for (var pi = 0; pi < SECTION_COUNT; pi++) {
+      panels.push(SFX.ui.buildSectionPanel(container, pi, {
+        input: onInput,
+        commit: onCommit,
+        rename: renameSection,
+        preset: applyPreset,
+        mutate: mutateSection,
+        play: playSection,
+        toggle: toggleSection
+      }));
+    }
 
     bind();
     measureCanvas();
     syncChips();
-    syncSections();
+    setBatchTarget(0);
+    syncPanels();
     renderAll(true, 8);
     refreshBank();
     writeHash();

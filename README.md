@@ -1,7 +1,11 @@
 # 8bitFX
 
 A retro **sound effect generator** that runs entirely in your browser — no build step, no
-dependencies, no server. Click a generator, twiddle sliders, export a WAV.
+dependencies, no server. Pick a preset, twiddle sliders, export a WAV.
+
+It shows **three full parameter windows side by side**, each with its own waveform — so every
+control of every layer is visible at once, no tabs or disclosure triangles. Layer them, tick the
+ones you want, and the master ▶ plays the mix.
 
 It is a faithful JavaScript port of DrPetter's **sfxr** synthesis model (the same one behind
 [sfxr.me](https://sfxr.me)): 8× oversampled rendering, square/saw/sine/noise oscillators,
@@ -36,33 +40,35 @@ chips · `bits`: 8, 16.)
 
 | | |
 |---|---|
-| **Generators** | Pickup/Coin, Laser/Shoot, Explosion, Power-Up, Hit/Hurt, Jump, Blip/Select, Synth, Tone, Random — each randomised like sfxr's own presets |
-| **3 synth sections** | Every section is a full voice with its own waveform, its own ▶ and a mix checkbox; the master ▶ plays the ticked sections mixed together |
+| **Three windows** | Every section is a complete voice with its own waveform, its own preset menu, its own ✳ mutate and ▶, and a mix checkbox in its header — all three are open at once |
+| **Presets** | Pickup/Coin, Laser/Shoot, Explosion, Power-Up, Hit/Hurt, Jump, Blip/Select, Synth, Tone, Random — each randomised like sfxr's own presets, loadable straight into any window |
 | **Mutate** | Nudges every parameter a little so you can evolve a sound instead of re-rolling it |
-| **23 sliders + 2 switches** | Waveform, envelope (attack / sustain / punch / decay), start frequency, min frequency, slide, delta slide, vibrato, arpeggio, duty cycle + sweep, retrigger, flanger, low-pass + high-pass filters, gain, DC blocker, waveform levelling |
-| **Live scope** | Big scope shows the mix; each section card carries its own mini scope. Drags render at reduced oversampling so long sounds stay responsive |
-| **8-bit / 16-bit** | Sample size toggle, plus 44.1 k / 22.05 k / 11.025 k / 8 k sample rates |
+| **23 sliders + 2 switches per window** | Waveform, envelope (attack / sustain / punch / decay), start frequency, min frequency, slide, delta slide, vibrato, arpeggio, duty cycle + sweep, retrigger, flanger, low-pass + high-pass filters, gain, DC blocker, waveform levelling |
+| **Live scopes** | A master scope in the sticky top bar shows the mix; each window draws its own waveform above its controls. Drags render at reduced oversampling so long sounds stay responsive |
+| **Roll all 3** | Fills the three windows with three different random presets and enables them all, for instant layered sounds |
+| **8-bit / 16-bit** | Sample size toggle, plus 44.1 k / 22.05 k / 11.025 k / 8 k sample rates (any rate via the URL) |
 | **Export** | WAV (mono PCM), JSON (sfxr-compatible parameter object), compact shareable permalink, and a **ZIP pack** of every banked sound |
-| **Bank** | Save sounds to a persistent strip (localStorage, 24 slots), click to reload, `×` to delete |
-| **Batch** | Roll 8 variations of the current generator and keep the best one |
+| **Bank** | Save patches to a persistent strip (localStorage, 24 slots), click to reload, `×` to delete |
+| **Batch** | Choose a target window (1/2/3), roll 8 variations into it and keep the best one |
 | **A/B compare** | `A` plays the sound as it was before your last change |
-| **Remembers your setup** | Open/collapsed panels, Normalize and Master volume persist in localStorage |
-| **Undo / Redo** | `Ctrl`/`Cmd` + `Z`, and `Ctrl`/`Cmd` + `Shift` + `Z` to redo |
+| **Remembers your setup** | Normalize and Master volume persist in localStorage |
+| **Undo / Redo** | `Ctrl`/`Cmd` + `Z`, and `Ctrl`/`Cmd` + `Shift` + `Z` to redo — across all three windows |
 
 ### Keyboard shortcuts
 
 | Key | Action |
 |---|---|
-| `Space` | Play / replay |
-| `G` | Generate a random sound |
-| `M` | Mutate the current sound |
+| `Space` | Play / replay the mix |
+| `G` | Generate a random preset into the focused window |
+| `M` | Mutate the focused window |
 | `A` | Play the previous sound (A/B) |
-| `1`–`4` | Square / Saw / Sine / Noise |
+| `1`–`4` | Square / Saw / Sine / Noise in the focused window |
 | `Ctrl`+`Z` | Undo |
 | `Ctrl`+`Shift`+`Z` | Redo |
 | `?` | Shortcut help |
 
-Sliders also respond to a **double-click**, which restores that parameter's default.
+`G`, `M` and `1`–`4` act on the window you last touched — it is outlined in accent green. Sliders
+also respond to a **double-click**, which restores that parameter's default.
 
 ## Exporting
 
@@ -72,7 +78,7 @@ Sliders also respond to a **double-click**, which restores that parameter's defa
   comfortable level in a game. Turn it off if you want sfxr's raw, quieter output.
 - **Save / Load .json** — `Save` writes the whole **patch** (`format: "8bitfx-layers"`, three
   sections + enabled flags). Loading a flat sfxr parameter object still works and drops it into
-  the section you are editing, so sounds can be moved between tools in both directions.
+  the focused window, so sounds can be moved between tools in both directions.
 - **Copy link** — the patch travels in the URL fragment as a **v4 payload** (three sections +
   flags, ~126 characters). Links made by older builds (`#3…`, `#2…` and the long base64-JSON
   form) still open as a single enabled section.
@@ -115,16 +121,17 @@ share links reproduce a sound bit-for-bit.
 Open `tests.html` for the in-browser suite (46 checks: WAV headers, export helpers, determinism,
 preset audibility, quantisation ranges, pitch accuracy, duration mapping, exact 8 kHz rate,
 parameter codec (single-sound, three-section patch links, legacy links), non-preset sample rates,
-mixer gain/tail/empty-mix maths, patch WAV export, bank migration, slider mapping, panel
+mixer gain/tail/empty-mix maths, patch WAV export, bank migration, slider mapping, section-window
 construction, mutation validity, DC blocking for long and short sounds, waveform levelling, the
 anti-click fade, ZIP structure and CRC-32, bank persistence, clipping detection, and a 120-sound
 fuzz pass).
 
 No Node needed — `test.cmd` runs two headless passes (the unit suite, then `index.html?selftest=1`
-and its 18 app checks: panel and section cards, shared rate/depth chips, the custom-rate legend,
-section selection, enabling/disabling sections, empty mixes, undo/redo, patch permalinks, the
-export-quality guard, WAV export length, preferences, label coverage, duplicate IDs, horizontal
-overflow, the bank and the ZIP writer) and exits non-zero if either fails. Manually:
+and its 18 app checks: the three windows and their control counts, shared rate/depth chips, the
+custom-rate legend, per-window state binding, panel checkboxes and per-window scopes, enabling /
+disabling sections, empty mixes, undo/redo, patch permalinks, the export-quality guard, WAV export
+length, preferences, label coverage, duplicate IDs, horizontal overflow, the bank and the ZIP
+writer) and exits non-zero if either fails. Manually:
 
 ```
 chrome --headless=new --disable-gpu --virtual-time-budget=40000 --dump-dom tests.html
@@ -171,7 +178,7 @@ js/rng.js           seeded mulberry32 PRNG
 js/params.js        parameter definitions, slider mapping, display formatting
 js/codec.js         permalinks: v3 binary payload, v2 + legacy decoders
 js/bank.js          localStorage sound bank (24 entries)
-js/prefs.js         persisted UI preferences (panels, normalize, volume)
+js/prefs.js         persisted UI preferences (normalize, master volume)
 js/zip.js           store-only ZIP writer used by the pack export
 js/export.js        parameters -> WAV bytes in one call (export, pack, self-test)
 js/io.js            downloads, clipboard, filenames, JSON sanity check
@@ -181,7 +188,7 @@ js/mix.js           mixes the sections (sum, 1/n gain, peak)
 js/wav.js           RIFF/WAVE encoder (8-bit unsigned, 16-bit signed)
 js/presets.js       generator heuristics + mutate()
 js/audio.js         Web Audio playback
-js/ui.js            parameter panel builder + oscilloscope + bank strip
+js/ui.js            section-window builder, oscilloscope drawing, bank strip
 js/selftest.js      the ?selftest=1 app checks
 js/app.js           state, rendering, workflow, boot
 tests.html          browser test suite
