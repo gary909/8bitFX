@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>8bitFX — 8-bit &amp; 16-bit sound effect generator</title>
+<meta name="description" content="A retro sound effect generator for games. Generate, mutate and export 8-bit / 16-bit WAV sound effects in your browser.">
+<link rel="stylesheet" href="css/styles.css">
+</head>
+<body>
+<a class="skip-link" href="#param-panel">Skip to parameters</a>
+
+<header class="topbar">
+  <h1 class="logo">8bit<span>FX</span></h1>
+  <p class="tagline">8-bit &amp; 16-bit sound effect generator</p>
+  <div class="topbar-actions">
+    <label class="master-vol" for="master-vol">Master
+      <input type="range" id="master-vol" min="0" max="150" value="100" aria-label="Playback master volume">
+    </label>
+    <button type="button" id="btn-help" class="icon-btn" title="Keyboard shortcuts" aria-label="Keyboard shortcuts">?</button>
+  </div>
+</header>
+
+<main class="layout">
+
+  <!-- ===== generators ===== -->
+  <aside class="panel generators" aria-labelledby="gen-heading">
+    <h2 id="gen-heading">Generators</h2>
+    <div class="gen-grid" id="gen-grid">
+      <button type="button" class="gen" data-preset="pickupCoin">Pickup<b>/Coin</b></button>
+      <button type="button" class="gen" data-preset="laserShoot">Laser<b>/Shoot</b></button>
+      <button type="button" class="gen" data-preset="explosion">Explosion</button>
+      <button type="button" class="gen" data-preset="powerUp">Power-Up</button>
+      <button type="button" class="gen" data-preset="hitHurt">Hit<b>/Hurt</b></button>
+      <button type="button" class="gen" data-preset="jump">Jump</button>
+      <button type="button" class="gen" data-preset="blipSelect">Blip<b>/Select</b></button>
+      <button type="button" class="gen" data-preset="synth">Synth</button>
+      <button type="button" class="gen gen-span" data-preset="tone">Tone</button>
+      <button type="button" class="gen gen-wide" data-preset="random">Random</button>
+    </div>
+
+    <h2>Actions</h2>
+    <div class="actions">
+      <button type="button" id="btn-play" class="btn btn-primary btn-wide">&#9654; Play</button>
+      <button type="button" id="btn-generate" class="btn">&#10227; Generate</button>
+      <button type="button" id="btn-mutate" class="btn">&#10033; Mutate</button>
+      <button type="button" id="btn-undo" class="btn" disabled>&#8630; Undo</button>
+      <button type="button" id="btn-redo" class="btn" disabled>&#8631; Redo</button>
+    </div>
+
+    <h2>Bank</h2>
+    <div class="bank" id="bank-grid"></div>
+    <div class="actions">
+      <button type="button" id="btn-bank-save" class="btn">&#9733; Save</button>
+      <button type="button" id="btn-bank-clear" class="btn">Clear</button>
+    </div>
+
+    <details class="group" id="batch-group">
+      <summary>Batch variations</summary>
+      <div class="group-body">
+        <div class="batch-grid" id="batch-grid"></div>
+        <button type="button" id="btn-batch" class="btn">&#10227; Roll 8</button>
+      </div>
+    </details>
+
+    <h2>Sound</h2>
+    <div class="stats">
+      <div><span class="stat-label">Duration</span><span id="stat-duration" class="stat-value">&mdash;</span></div>
+      <div><span class="stat-label">Samples</span><span id="stat-samples" class="stat-value">&mdash;</span></div>
+      <div><span class="stat-label">File size</span><span id="stat-size" class="stat-value">&mdash;</span></div>
+      <div><span class="stat-label">Clipped</span><span id="stat-clipped" class="stat-value">&mdash;</span></div>
+    </div>
+    <p class="hint" id="clip-hint" hidden>Clipping &mdash; lower the Gain slider.</p>
+    <p class="note" id="cap-hint" hidden>Length capped at 4 s.</p>
+  </aside>
+
+  <!-- ===== stage ===== -->
+  <section class="panel stage" aria-labelledby="stage-heading">
+    <h2 id="stage-heading" class="visually-hidden">Sound preview</h2>
+
+    <div class="scope">
+      <canvas id="waveform" width="900" height="260" role="img"
+              aria-label="Waveform preview" aria-describedby="scope-desc"></canvas>
+      <p class="scope-empty" id="scope-empty">No sound yet &mdash; hit Generate</p>
+      <p class="visually-hidden" id="scope-desc">Waveform of the current sound. Its length,
+        sample count, file size and clip count are listed under Sound.</p>
+    </div>
+
+    <div class="stage-controls">
+      <fieldset class="chipset">
+        <legend id="rate-legend">Sample rate</legend>
+        <div class="chips" id="rate-chips">
+          <input type="radio" name="rate" id="rate-44100" value="44100" checked><label for="rate-44100">44k</label>
+          <input type="radio" name="rate" id="rate-22050" value="22050"><label for="rate-22050">22k</label>
+          <input type="radio" name="rate" id="rate-11025" value="11025"><label for="rate-11025">11k</label>
+          <input type="radio" name="rate" id="rate-8000" value="8000"><label for="rate-8000">8k</label>
+        </div>
+      </fieldset>
+
+      <fieldset class="chipset">
+        <legend>Sample size</legend>
+        <div class="chips" id="bits-chips">
+          <input type="radio" name="bits" id="bits-8" value="8" checked><label for="bits-8">8 bit</label>
+          <input type="radio" name="bits" id="bits-16" value="16"><label for="bits-16">16 bit</label>
+        </div>
+      </fieldset>
+
+      <label class="switch" for="chk-normalize">
+        <input type="checkbox" id="chk-normalize" checked>
+        <span>Normalize on export</span>
+      </label>
+    </div>
+
+    <p class="hints">
+      <kbd>Space</kbd> play
+      <kbd>G</kbd> generate
+      <kbd>M</kbd> mutate
+      <kbd>A</kbd> previous
+      <kbd>1</kbd>&ndash;<kbd>4</kbd> waveform
+      <kbd>Ctrl</kbd>+<kbd>Z</kbd> undo
+      <kbd>?</kbd> help
+    </p>
+  </section>
+
+  <!-- ===== parameters ===== -->
+  <section class="panel params" id="param-panel" aria-labelledby="param-heading">
+    <h2 id="param-heading">Parameters</h2>
+    <div id="param-groups"><!-- built by ui.js --></div>
+  </section>
+</main>
+
+<footer class="exportbar">
+  <button type="button" id="btn-wav" class="btn btn-primary">&#8595; WAV</button>
+  <button type="button" id="btn-json" class="btn">Save .json</button>
+  <button type="button" id="btn-load" class="btn">Load .json</button>
+  <input type="file" id="file-input" accept=".json,application/json" hidden>
+  <button type="button" id="btn-copy-json" class="btn">Copy JSON</button>
+  <button type="button" id="btn-copy-link" class="btn">Copy link</button>
+  <button type="button" id="btn-pack" class="btn">Pack .zip</button>
+</footer>
+
+<div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+<dialog id="help-dialog" class="help">
+  <h2>Keyboard shortcuts</h2>
+  <dl>
+    <dt><kbd>Space</kbd></dt><dd>Play / replay</dd>
+    <dt><kbd>G</kbd></dt><dd>Generate random sound</dd>
+    <dt><kbd>M</kbd></dt><dd>Mutate current sound</dd>
+    <dt><kbd>A</kbd></dt><dd>Play the previous sound (A/B)</dd>
+    <dt><kbd>1</kbd>&ndash;<kbd>4</kbd></dt><dd>Square / Saw / Sine / Noise</dd>
+    <dt><kbd>Ctrl</kbd>+<kbd>Z</kbd></dt><dd>Undo parameter change</dd>
+    <dt><kbd>?</kbd></dt><dd>This help</dd>
+  </dl>
+  <form method="dialog"><button class="btn">Close</button></form>
+</dialog>
+
+<script src="js/rng.js"></script>
+<script src="js/params.js"></script>
+<script src="js/codec.js"></script>
+<script src="js/synth.js"></script>
+<script src="js/wav.js"></script>
+<script src="js/zip.js"></script>
+<script src="js/export.js"></script>
+<script src="js/presets.js"></script>
+<script src="js/audio.js"></script>
+<script src="js/bank.js"></script>
+<script src="js/prefs.js"></script>
+<script src="js/io.js"></script>
+<script src="js/shortcuts.js"></script>
+<script src="js/ui.js"></script>
+<script src="js/selftest.js"></script>
+<script src="js/app.js"></script>
+</body>
+</html>
+

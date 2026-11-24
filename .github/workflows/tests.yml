@@ -1,0 +1,19 @@
+name: tests
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  headless:
+    name: Browser suite (Windows + Chrome)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # runs tests.html headlessly, then index.html?selftest=1, and fails the job
+      # if either pass reports a failure
+      - name: Unit suite + app self-test
+        shell: cmd
+        run: test.cmd

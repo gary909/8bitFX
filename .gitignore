@@ -1,0 +1,18 @@
+# OS / editor noise
+Thumbs.db
+desktop.ini
+.DS_Store
+*.swp
+
+# scratch output from the headless checks
+dom-*.html
+run.log
+narrow.png
+mobile.png
+dpr2.png
+tall.png
+test.wav
+*.zip
+
+# tooling (the project itself has no build step)
+node_modules/

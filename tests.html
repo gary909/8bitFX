@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>8bitFX — test suite</title>
+<style>
+  body { margin: 0; padding: 24px 20px 60px; background: #070810; color: #e8eeff;
+         font: 13px/1.5 ui-monospace, Consolas, "Courier New", monospace; }
+  h1 { font-size: 15px; letter-spacing: .14em; text-transform: uppercase; color: #46ffa6; }
+  #summary { font-size: 13px; padding: 8px 12px; border: 2px solid #2b3358; display: inline-block; }
+  #summary.pass { border-color: #46ffa6; color: #46ffa6; }
+  #summary.fail { border-color: #ff6b6b; color: #ff6b6b; }
+  ol { padding-left: 22px; }
+  li { margin: 5px 0; }
+  li .name { color: #e8eeff; }
+  li .detail { color: #828cb4; }
+  li.ok::marker { color: #46ffa6; }
+  li.bad { color: #ff6b6b; }
+  li.bad::marker { color: #ff6b6b; }
+</style>
+</head>
+<body>
+<h1>8bitFX test suite</h1>
+<p id="summary">Running&hellip;</p>
+<ol id="results"></ol>
+
+<script src="js/rng.js"></script>
+<script src="js/params.js"></script>
+<script src="js/codec.js"></script>
+<script src="js/synth.js"></script>
+<script src="js/wav.js"></script>
+<script src="js/zip.js"></script>
+<script src="js/export.js"></script>
+<script src="js/presets.js"></script>
+<script src="js/bank.js"></script>
+<script src="js/ui.js"></script>
+<script src="js/tests.js"></script>
+<script>
+(function () {
+  var out = SFX.tests.run();
+  var list = document.getElementById("results");
+  var summary = document.getElementById("summary");
+  var i, li, res;
+
+  for (i = 0; i < out.results.length; i++) {
+    res = out.results[i];
+    li = document.createElement("li");
+    li.className = res.ok ? "ok" : "bad";
+    li.innerHTML = '<span class="name"></span> <span class="detail"></span>';
+    li.getElementsByClassName("name")[0].textContent = res.name;
+    li.getElementsByClassName("detail")[0].textContent = res.ok ? res.detail : ("FAILED: " + res.detail);
+    list.appendChild(li);
+  }
+
+  summary.textContent = out.passed + " passed, " + out.failed + " failed";
+  summary.className = out.failed ? "fail" : "pass";
+  if (window.console) { console.log(out); }
+}());
+</script>
+<script>
+/* ?zip=1 dumps a real archive as base64 so an external unzip can validate it
+   (used by the manual/CI check: decode, then Expand-Archive / unzip -t). */
+(function () {
+  if (!/[?&]zip=1/.test(location.search)) { return; }
+
+  var pcm = new Uint8Array(200), i;
+  for (i = 0; i < pcm.length; i++) { pcm[i] = i & 0xff; }
+
+  var wav = SFX.wav.encode(pcm, { sampleRate: 8000, bits: 8 });
+  var zip = SFX.zip.create([
+    { name: "one.wav", data: new Uint8Array(wav.buffer) },
+    { name: "two.txt", data: [104, 105] }
+  ]);
+
+  var bin = "", j;
+  for (j = 0; j < zip.length; j++) { bin += String.fromCharCode(zip[j]); }
+
+  var pre = document.createElement("pre");
+  pre.id = "zipdump";
+  pre.textContent = btoa(bin);
+  document.body.appendChild(pre);
+}());
+</script>
+<script>
+/* ?wav=1 dumps a real WAV as base64 so an external decoder can validate it
+   (decoded with Windows' SoundPlayer during development). */
+(function () {
+  if (!/[?&]wav=1/.test(location.search)) { return; }
+
+  var out = SFX.exporter.toWav(SFX.presets.make("laserShoot", 99), { normalize: true });
+  var bin = "", j;
+  for (j = 0; j < out.bytes.length; j++) { bin += String.fromCharCode(out.bytes[j]); }
+
+  var pre = document.createElement("pre");
+  pre.id = "wavdump";
+  pre.textContent = btoa(bin);
+  document.body.appendChild(pre);
+}());
+</script>
+</body>
+</html>
